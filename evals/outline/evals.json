@@ -179,7 +179,7 @@
   ],
   "notes": [
    "Both conditions found the dead copy, the unrendered footer chain and the live module by tracing imports; the without-skill runs did it in 9 tool calls. The script's `claims` check alone passes the fake fix (12 claims, no contradiction); the with-skill runs said so and used the orphan scan's twin line as evidence.",
-   "Both prompt-2 runs, and one prompt-1 run, also noticed the live check compares case exactly while the router doesn't, so /Logout gets through too. That is beyond the answer key and was not graded.",
+   "Both prompt-2 runs also noticed the live check compares case exactly while the router doesn't, so /Logout gets through too. That is beyond the answer key and was not graded.",
    "Every fixture copy was left as found (HEAD 0612005, only the untracked agent-summary.txt)."
   ]
  }

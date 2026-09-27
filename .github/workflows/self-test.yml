@@ -33,3 +33,8 @@ jobs:
         run: |
           pip install --quiet pyyaml
           python .github/scripts/check_frontmatter.py
+      - name: This repo passes Cairn Memory's audit
+        # The family checks its own agent-facing files with Cairn Memory, fetched from its repo.
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/nicuk/claude-md-memory-architecture/main/skills/memory-architecture/scripts/audit_memory.py -o "$RUNNER_TEMP/audit_memory.py"
+          python "$RUNNER_TEMP/audit_memory.py" --repo .

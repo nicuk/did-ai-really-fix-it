@@ -6,8 +6,8 @@ It is a *locator*, not a judge. It finds claims that the diff contradicts or lea
 unproven; the skill (SKILL.md) turns those into verdicts by reading code and running tests.
 
 Usage:
-  python verify_claims.py claims  --repo PATH --range BASE..HEAD [--text FILE] [--json]
-  python verify_claims.py orphans --repo PATH [--entry GLOB ...] [--alias @=.] [--json]
+  python verify_claims.py claims  --repo PATH --range BASE..HEAD [--text FILE] [--json | --markdown] [--smoke CMD]
+  python verify_claims.py orphans --repo PATH [--entry GLOB ...] [--alias @=.] [--json] [--smoke CMD]
   python verify_claims.py --self-test
 
 `claims` reads the commit messages in the range (and an optional PR description or agent
@@ -28,9 +28,16 @@ summary in --text), splits them into claims, and checks each against the diff:
                           so dead code kept alive only by other dead code is found in rounds
   twin                    one exported name defined in several files, with which are reachable
                           from an entry point, so the live one is not deleted by name
+Import aliases come from --alias and, automatically, from every tsconfig/jsconfig
+`compilerOptions.paths` and `baseUrl` in the repository (comments and trailing commas allowed).
+
+--smoke "COMMAND" starts the app once before you trust an unreachable file: it adds a temporary
+`git worktree` of HEAD (or the range's head) in the system temp folder, runs COMMAND there under
+a timeout, reports whether it started, and removes the worktree, even on failure or timeout.
 
 Read-only: it reads files and runs `git log` / `git diff` / `git show` / `git ls-files` in
-the repository you name. It writes nothing there and makes no network requests.
+the repository you name. It writes nothing there and makes no network requests. Only --smoke
+runs anything else: your own COMMAND, in the temporary worktree, never in your checkout.
 """
 from __future__ import annotations
 
@@ -38,10 +45,14 @@ import argparse
 import fnmatch
 import json
 import os
+import posixpath
 import re
+import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -62,8 +73,24 @@ DEFAULT_ENTRIES = [
 ]
 
 
+def clean_env() -> dict:
+    """The environment for every git call, minus inherited GIT_* variables.
+
+    Git hooks run with GIT_DIR (and sometimes GIT_WORK_TREE or GIT_INDEX_FILE) set. A
+    `git -C <temp folder>` call that inherits them acts on the hook's repository instead,
+    which is how a pre-push hook running this self-test once committed its fixtures onto a
+    real main branch and pushed them (2026-09-27). Every git call here uses this.
+    """
+    return {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+
+
+def git_run(cmd: list, **kw):
+    kw.setdefault("env", clean_env())
+    return subprocess.run(cmd, **kw)
+
+
 def run_git(repo: Path, *args: str) -> str:
-    return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True,
+    return git_run(["git", "-C", str(repo), *args], capture_output=True, text=True,
                           encoding="utf-8", errors="replace", check=True).stdout
 
 
@@ -225,7 +252,19 @@ def resolve_claimed(path: str, files: set[str]) -> list[str]:
 def import_specs(text: str) -> list[str]:
     # `export … from` re-exports count: an index file that re-exports a module keeps it alive.
     specs = re.findall(r"""(?:\b(?:import|export)\s[^'";]*?\sfrom\s*|import\s*\(\s*|require\s*\(\s*|^\s*import\s+)['"]([^'"]+)['"]""", text, re.M)
-    specs += [m.replace(".", "/") for m in re.findall(r"^\s*from\s+([\w.]+)\s+import\b", text, re.M)]
+    for mod, names in re.findall(r"^[ \t]*from\s+([\w.]+)\s+import\s+(\([^)]*\)|[^\n#;]*)", text, re.M):
+        # `from .models import M` is ./models; `from ..x import y` is ../x; `from . import helpers`
+        # and `from pkg import submodule` name a module after `import`, so each name is a candidate too
+        # (a name that is a function, not a module, resolves to no file and adds no edge).
+        dots = len(mod) - len(mod.lstrip("."))
+        rel = ("./" if dots == 1 else "../" * (dots - 1)) if dots else ""
+        base = rel + mod[dots:].replace(".", "/")
+        if mod[dots:]:
+            specs.append(base)
+        for part in names.strip("()").split(","):
+            words = part.split()
+            if words and words[0].isidentifier():
+                specs.append(f"{base}/{words[0]}" if mod[dots:] else rel + words[0])
     specs += [m.replace(".", "/") for m in re.findall(r"^\s*import\s+([\w.]+)", text, re.M)]
     return specs
 
@@ -284,7 +323,7 @@ def evaluate(repo: Path, rng: str, claims: list[Claim]) -> list[Claim]:
         need = [p for p in paths if p not in head_text]
         if not need:
             return
-        out = subprocess.run(["git", "-C", str(repo), "cat-file", "--batch"],
+        out = git_run(["git", "-C", str(repo), "cat-file", "--batch"],
                              input="".join(f"{head}:{p}\n" for p in need).encode("utf-8"),
                              capture_output=True, check=True).stdout
         pos = 0
@@ -396,20 +435,157 @@ def list_code_files(repo: Path) -> list[str]:
     return sorted(f for f in files if f.endswith(CODE_EXT) and not any(part in SKIP_DIRS for part in f.split("/")))
 
 
-def resolve_spec(spec: str, importer: str, files: set[str], aliases: dict[str, str]) -> str | None:
+@dataclass
+class Alias:
+    """One import alias: `key` is an exact name ("@config") or a pattern with one "*" ("@core/*");
+    each target is a repo-relative path where "*" becomes whatever the key's "*" matched."""
+    key: str
+    targets: list[str]
+    scope: str = ""          # only importers under this folder use it ("" = the whole repo)
+    js_only: bool = False    # tsconfig/jsconfig aliases never apply to Python imports
+    origin: str = ""         # where it came from, for the report
+
+    def candidates(self, spec: str, importer: str) -> list[str]:
+        if (self.scope and not importer.startswith(self.scope + "/")) or (self.js_only and importer.endswith(".py")):
+            return []
+        if "*" in self.key:
+            pre, post = self.key.split("*", 1)
+            if len(spec) < len(pre) + len(post) or not spec.startswith(pre) or not spec.endswith(post):
+                return []
+            mid = spec[len(pre):len(spec) - len(post)]
+            return [posixpath.normpath(t.replace("*", mid, 1)) for t in self.targets]
+        return [posixpath.normpath(t) for t in self.targets] if spec == self.key else []
+
+
+def flag_aliases(pairs: dict[str, str], origin: str) -> list[Alias]:
+    """`--alias @=src` means both `@` and `@/…` resolve under src/."""
+    out = []
+    for prefix, target in pairs.items():
+        target = target.rstrip("/") or "."
+        out += [Alias(prefix, [target], origin=origin), Alias(prefix + "/*", [target + "/*"], origin=origin)]
+    return out
+
+
+def strip_jsonc(text: str) -> str:
+    """tsconfig.json and jsconfig.json allow // and /* */ comments and trailing commas; json.loads doesn't."""
+    def outside_strings(s: str, step) -> str:
+        out: list[str] = []
+        i, in_str = 0, False
+        while i < len(s):
+            ch = s[i]
+            if in_str:
+                out.append(ch)
+                if ch == "\\" and i + 1 < len(s):
+                    out.append(s[i + 1])
+                    i += 1
+                elif ch == '"':
+                    in_str = False
+                i += 1
+            elif ch == '"':
+                in_str = True
+                out.append(ch)
+                i += 1
+            else:
+                i = step(s, i, out)
+        return "".join(out)
+
+    def no_comments(s: str, i: int, out: list[str]) -> int:
+        if s.startswith("//", i):
+            j = s.find("\n", i)
+            return len(s) if j < 0 else j
+        if s.startswith("/*", i):
+            j = s.find("*/", i + 2)
+            return len(s) if j < 0 else j + 2
+        out.append(s[i])
+        return i + 1
+
+    def no_trailing_commas(s: str, i: int, out: list[str]) -> int:
+        if s[i] == "," and re.match(r"\s*[}\]]", s[i + 1:]):
+            return i + 1
+        out.append(s[i])
+        return i + 1
+
+    return outside_strings(outside_strings(text.lstrip("\ufeff"), no_comments), no_trailing_commas)
+
+
+CONFIG_FILE = re.compile(r"(^|/)(tsconfig|jsconfig)(\.[\w.-]+)?\.json$")
+
+
+def config_aliases(repo: Path, tracked: list[str]) -> list[Alias]:
+    """Aliases from every tracked tsconfig/jsconfig: `paths` (relative to `baseUrl`, or to the
+    config that declares them) and `baseUrl` itself, following relative `extends`. Each applies
+    only to files under its config's folder, deepest config first."""
+    def read(rel: str) -> dict | None:
+        try:
+            data = json.loads(strip_jsonc((repo / rel).read_text(encoding="utf-8", errors="replace")))
+        except (OSError, ValueError) as e:
+            print(f"note: could not read {rel} ({e.__class__.__name__}: {e}); its import aliases are ignored", file=sys.stderr)
+            return None
+        return data if isinstance(data, dict) else None
+
+    def effective(rel: str, depth: int = 0) -> tuple[str | None, dict | None, str | None]:
+        """(baseUrl, paths, folder paths are relative to when there is no baseUrl), after `extends`."""
+        data = read(rel) if depth < 10 else None
+        if data is None:
+            return None, None, None
+        here = posixpath.dirname(rel)
+        base_url = paths = paths_dir = None
+        ext = data.get("extends")
+        for e in ext if isinstance(ext, list) else [ext]:
+            if isinstance(e, str) and e.startswith("."):       # a package preset (@tsconfig/next) isn't in the repo
+                p = posixpath.normpath(posixpath.join(here, e))
+                p = p if p.endswith(".json") else p + ".json"
+                if not p.startswith("..") and (repo / p).is_file():
+                    b, pa, pd = effective(p, depth + 1)
+                    base_url = b if b is not None else base_url
+                    if pa is not None:
+                        paths, paths_dir = pa, pd
+        opts = data.get("compilerOptions") if isinstance(data.get("compilerOptions"), dict) else {}
+        if isinstance(opts.get("baseUrl"), str):
+            base_url = posixpath.normpath(posixpath.join(here, opts["baseUrl"]))
+        if isinstance(opts.get("paths"), dict):
+            paths, paths_dir = opts["paths"], here
+        return base_url, paths, paths_dir
+
+    configs = sorted({f for f in tracked if CONFIG_FILE.search(f) and not any(p in SKIP_DIRS for p in f.split("/"))}
+                     | {n for n in ("tsconfig.json", "jsconfig.json") if (repo / n).is_file()})
+    out: list[Alias] = []
+    seen: set[tuple] = set()
+    for cfg in configs:
+        base_url, paths, paths_dir = effective(cfg)
+        scope = posixpath.dirname(cfg)
+        found: list[Alias] = []
+        for key, targets in (paths or {}).items():
+            targets = [targets] if isinstance(targets, str) else targets
+            if not isinstance(targets, list) or key.count("*") > 1:
+                continue
+            root = base_url if base_url is not None else (paths_dir or "")
+            ts = [posixpath.normpath(posixpath.join(root, t)) for t in targets if isinstance(t, str) and t.count("*") <= 1]
+            if ts:
+                found.append(Alias(key, ts, scope, True, cfg))
+        if base_url is not None:                       # a bare `lib/x` resolves from baseUrl too
+            found.append(Alias("*", [posixpath.join(base_url, "*")], scope, True, cfg + " baseUrl"))
+        for al in found:
+            sig = (al.key, tuple(al.targets), al.scope)
+            if sig not in seen:
+                seen.add(sig)
+                out.append(al)
+    # deepest config first, then the most specific pattern, as TypeScript does
+    return sorted(out, key=lambda a: (-(a.scope.count("/") + bool(a.scope)), -len(a.key.split("*")[0]), a.key == "*"))
+
+
+def resolve_spec(spec: str, importer: str, files: set[str], aliases: list[Alias]) -> str | None:
     spec = spec.split("?")[0]
     cands: list[str] = []
     if spec.startswith("."):
         base = os.path.normpath(os.path.join(os.path.dirname(importer), spec)).replace("\\", "/")
         cands.append(base)
     else:
-        for prefix, target in aliases.items():
-            if spec == prefix or spec.startswith(prefix + "/"):
-                rest = spec[len(prefix):].lstrip("/")
-                cands.append(os.path.normpath(os.path.join(target, rest)).replace("\\", "/"))
+        for al in aliases:
+            cands += al.candidates(spec, importer)
         if "/" in spec or importer.endswith(".py"):
             cands.append(spec)                    # python dotted module, or a bare repo path
-            cands.append("src/" + spec)
+            cands.append("src/" + spec)           # src layout: top-level Python packages live under src/
     for c in cands:
         c = c.lstrip("./") if not c.startswith("..") else c
         for suffix in ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py",
@@ -419,7 +595,10 @@ def resolve_spec(spec: str, importer: str, files: set[str], aliases: dict[str, s
     return None
 
 
-def check_orphans(repo: Path, entries: list[str], aliases: dict[str, str]) -> dict:
+def check_orphans(repo: Path, entries: list[str], aliases: dict[str, str],
+                  fallback_aliases: dict[str, str] | None = None) -> dict:
+    """`aliases` (from --alias) are tried first, then every tsconfig/jsconfig alias, then
+    `fallback_aliases` (the @ and ~ defaults, used when no --alias is given)."""
     files = list_code_files(repo)
     fileset = set(files)
     texts = {f: (repo / f).read_text(encoding="utf-8", errors="replace") for f in files}
@@ -436,10 +615,12 @@ def check_orphans(repo: Path, entries: list[str], aliases: dict[str, str]) -> di
             except OSError:
                 pass
 
+    from_config = config_aliases(repo, all_tracked)
+    alias_list = flag_aliases(aliases, "--alias") + from_config + flag_aliases(fallback_aliases or {}, "default")
     edges: dict[str, set[str]] = {f: set() for f in files}     # file -> files it imports
     for f, t in texts.items():
         for spec in import_specs(t):
-            tgt = resolve_spec(spec, f, fileset, aliases)
+            tgt = resolve_spec(spec, f, fileset, alias_list)
             if tgt and tgt != f:
                 edges[f].add(tgt)
 
@@ -556,23 +737,149 @@ def check_orphans(repo: Path, entries: list[str], aliases: dict[str, str]) -> di
     unreachable_share = len(orphaned) / len(non_test) if non_test else 0.0
     return {"rounds": rounds, "twins": twins, "named_only": named_only, "test_only": test_only,
             "files": len(files), "unreachable_share": round(unreachable_share, 2),
-            "entries": sorted(f for f in files if is_entry(f) and not is_test(f))[:50]}
+            "entries": sorted(f for f in files if is_entry(f) and not is_test(f))[:50],
+            "config_aliases": [f"{a.key} -> {', '.join(a.targets)} ({a.origin})" for a in from_config]}
 
 
 # ------------------------------------------------------------------ output
 
 def print_claims(claims: list[Claim]) -> None:
-    order = {"CONTRADICTED": 0, "UNPROVEN": 1, "NO CONTRADICTION FOUND": 2}
+    order = STATUS_ORDER
     for c in sorted(claims, key=lambda c: order[c.status]):
         print(f"\n[{c.status}] ({c.source}) {c.text}")
         for f in c.findings:
             print(f"  - {f['check']}: {f['msg']}")
     n = {s: sum(c.status == s for c in claims) for s in order}
     print(f"\n{len(claims)} claims: {n['CONTRADICTED']} contradicted, {n['UNPROVEN']} unproven, "
-          f"{n['NO CONTRADICTION FOUND']} with no contradiction found — none of these is a verdict until the code is read")
+          f"{n['NO CONTRADICTION FOUND']} with no contradiction found — {NOT_A_VERDICT}")
+
+
+STATUS_ORDER = {"CONTRADICTED": 0, "UNPROVEN": 1, "NO CONTRADICTION FOUND": 2}
+NOT_A_VERDICT = "none of these is a verdict until the code is read"
+
+
+def claims_markdown(claims: list[Claim], rng: str, max_rows: int = 60) -> str:
+    """A summary line, a table of claims, and the standing line, e.g. for a PR comment."""
+    def cell(s: str) -> str:
+        # one table row per claim: no newlines, no pipes, no raw HTML (a claim can't hide or break the table)
+        return re.sub(r"\s+", " ", s).replace("|", "\\|").replace("<", "&lt;").replace(">", "&gt;").strip()
+
+    n = {s: sum(c.status == s for c in claims) for s in STATUS_ORDER}
+    lines = [f"**{len(claims)} claims: {n['CONTRADICTED']} contradicted, {n['UNPROVEN']} unproven, "
+             f"{n['NO CONTRADICTION FOUND']} no contradiction found** (range `{cell(rng)}`)", ""]
+    ordered = sorted(claims, key=lambda c: STATUS_ORDER[c.status])
+    if ordered:
+        lines += ["| # | Status | Claim | From | Findings |", "|---|---|---|---|---|"]
+        for i, c in enumerate(ordered[:max_rows], 1):
+            text = c.text if len(c.text) <= 300 else c.text[:297] + "..."
+            findings = "<br>".join(f"**{f['check']}**: {cell(f['msg'])}" for f in c.findings) or "none"
+            source = "PR text" if c.source == "summary" else f"`{c.source}`"
+            status = f"**{c.status}**" if c.status == "CONTRADICTED" else c.status
+            lines.append(f"| {i} | {status} | {cell(text)} | {source} | {findings} |")
+        if len(ordered) > max_rows:
+            lines += ["", f"...and {len(ordered) - max_rows} more; run `verify_claims.py claims` locally for the full list."]
+    lines += ["", f"_{NOT_A_VERDICT[0].upper() + NOT_A_VERDICT[1:]}. CONTRADICTED means the repository disagrees "
+                  f"with the sentence, UNPROVEN means nothing in the diff backs it, and NO CONTRADICTION FOUND "
+                  f"does not mean it is true._"]
+    return "\n".join(lines) + "\n"
+
+
+def kill_tree(proc: subprocess.Popen) -> None:
+    """Stop the command we started and everything it started: by its PID / process group, never by name."""
+    if os.name == "nt":
+        subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"], capture_output=True, timeout=30)
+    else:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)       # start_new_session made proc.pid the group id
+        except ProcessLookupError:
+            pass
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+
+
+def smoke(repo: Path, command: str, timeout: float = 120, ref: str = "HEAD") -> dict:
+    """Start the app once in a throwaway worktree of `ref`, created in the system temp folder
+    (never inside the user's checkout, never on their branch), and remove it afterwards."""
+    res = {"command": command, "ref": ref, "commit": "", "started": False, "timed_out": False,
+           "exit_code": None, "tail": [], "error": "", "timeout": timeout, "worktree": ""}
+    tmp = Path(tempfile.mkdtemp(prefix="cairn-smoke-"))
+    wt = tmp / "worktree"
+    res["worktree"] = str(wt)
+    added = False
+    try:
+        try:
+            sha = run_git(repo, "rev-parse", "--verify", ref + "^{commit}").strip()
+            res["commit"] = sha[:12]
+            git_run(["git", "-C", str(repo), "worktree", "add", "--detach", "-q", str(wt), sha],
+                           check=True, capture_output=True, text=True, timeout=300)
+            added = True
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError) as e:
+            detail = getattr(e, "stderr", "") or str(e)
+            res["error"] = f"could not create a temporary worktree of {ref}: {str(detail).strip()[:300]}"
+            return res
+        log = tmp / "output.log"
+        kw = {"start_new_session": True} if os.name != "nt" else {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
+        with open(log, "wb") as out:
+            proc = subprocess.Popen(command, shell=True, cwd=wt, stdout=out, stderr=subprocess.STDOUT,
+                                    stdin=subprocess.DEVNULL, env=clean_env(), **kw)
+            try:
+                res["exit_code"] = proc.wait(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                res["timed_out"] = True
+                kill_tree(proc)
+                res["exit_code"] = proc.returncode
+        res["started"] = res["exit_code"] == 0 and not res["timed_out"]
+        res["tail"] = log.read_text(encoding="utf-8", errors="replace").splitlines()[-20:]
+    finally:
+        if added:
+            r = git_run(["git", "-C", str(repo), "worktree", "remove", "--force", str(wt)],
+                               capture_output=True, text=True, timeout=300)
+            if r.returncode != 0:
+                print(f"note: git worktree remove failed ({r.stderr.strip()[:200]}); deleting the folder and pruning",
+                      file=sys.stderr)
+        for _ in range(20):                    # Windows can hold a file briefly after a kill
+            shutil.rmtree(tmp, ignore_errors=True)
+            if not tmp.exists():
+                break
+            time.sleep(0.5)
+        if tmp.exists():
+            print(f"note: could not delete the temporary folder {tmp}; delete it by hand", file=sys.stderr)
+        if added:
+            git_run(["git", "-C", str(repo), "worktree", "prune"], capture_output=True, timeout=300)
+    return res
+
+
+def smoke_lines(s: dict) -> list[str]:
+    where = f"a temporary worktree of {s['ref']}" + (f" @ {s['commit']}" if s["commit"] else "")
+    if s["error"]:
+        head = [f"SMOKE TEST COULD NOT RUN: {s['error']}"]
+    elif s["started"]:
+        return [f"smoke: app starts (`{s['command']}` exited 0 in {where})"]
+    else:
+        why = (f"did not finish within {s['timeout']:g}s and was stopped; if it starts a server that keeps running, "
+               f"use a command that exits once the app has loaded (an import, a build, one request)"
+               if s["timed_out"] else f"exited with code {s['exit_code']}")
+        head = [f"APP FAILED TO START: `{s['command']}` {why} (in {where})."]
+    return head + ["Unreachable-file conclusions can't be trusted until it starts: a module the scan calls dead may be",
+                   "loaded at runtime, or the app may already be broken. Fix the start first, then re-run."] + \
+        (["last lines of output:"] + [f"  | {l}" for l in s["tail"]] if s["tail"] else [])
+
+
+def print_smoke(s: dict) -> None:
+    lines = smoke_lines(s)
+    if s["started"]:
+        print("\n" + lines[0])
+        return
+    bar = "!" * 78
+    print("\n" + "\n".join([bar] + lines + [bar]))
 
 
 def print_orphans(res: dict) -> None:
+    if res.get("config_aliases"):
+        print(f"import aliases read from tsconfig/jsconfig: {'; '.join(res['config_aliases'][:10])}")
     for i, r in enumerate(res["rounds"], 1):
         label = "nothing imports these" if i == 1 else f"only imported by round {i - 1}"
         print(f"\nround {i} ({len(r)}): {label}")
@@ -603,8 +910,50 @@ def print_orphans(res: dict) -> None:
 # ------------------------------------------------------------------ self-test
 
 def self_test() -> int:
+    """Run every check's planted case with GIT_DIR pointing at a sentinel repository, as it
+    does inside a git hook, and fail if the sentinel changes at all."""
+    with tempfile.TemporaryDirectory() as sd:
+        sentinel = Path(sd) / "sentinel"
+        sentinel.mkdir()
+        base = ["git", "-C", str(sentinel), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
+        git_run(base + ["init", "-q"], check=True, capture_output=True)
+        (sentinel / "keep.txt").write_text("sentinel" + chr(10), encoding="utf-8")
+        git_run(base + ["add", "-A"], check=True, capture_output=True)
+        git_run(base + ["commit", "-q", "-m", "sentinel"], check=True, capture_output=True)
+        def state() -> tuple:
+            head = git_run(["git", "-C", str(sentinel), "rev-parse", "HEAD"], capture_output=True, text=True).stdout
+            bare = git_run(["git", "-C", str(sentinel), "config", "core.bare"], capture_output=True, text=True).stdout
+            count = git_run(["git", "-C", str(sentinel), "rev-list", "--all", "--count"], capture_output=True, text=True).stdout
+            return head.strip(), bare.strip(), count.strip(), sorted(p.name for p in sentinel.iterdir())
+        before = state()
+        saved = {k: os.environ.get(k) for k in ("GIT_DIR", "GIT_WORK_TREE")}
+        # Only GIT_DIR, as a pre-push hook sets it: git then treats the current folder as the
+        # work tree, which is exactly how fixture files once got committed into a real repo.
+        os.environ["GIT_DIR"] = str(sentinel / ".git")
+        os.environ.pop("GIT_WORK_TREE", None)
+        try:
+            rc = _self_test_checks()
+        except Exception as e:          # a leaked GIT_DIR usually crashes the fixtures first
+            print(f"self-test crashed: {e.__class__.__name__}: {str(e)[:200]}")
+            rc = 1
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        after = state()
+    isolated = before == after
+    print(f"{'ok  ' if isolated else 'MISS'} hook-env-isolation: a GIT_DIR inherited from a git hook never reaches the real repository")
+    if not isolated:
+        print(f"self-test FAILED: the self-test changed the repository named by GIT_DIR ({before} -> {after})")
+        return 1
+    return rc
+
+
+def _self_test_checks() -> int:
     def git(repo: Path, *a: str) -> None:
-        subprocess.run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c",
+        git_run(["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c",
                         "commit.gpgsign=false", *a], check=True, capture_output=True)
 
     def write(repo: Path, files: dict[str, str | None]) -> None:
@@ -639,8 +988,21 @@ def self_test() -> int:
         git(repo, "commit", "-q", "-m",
             "Fixed the session bug in `src/auth.ts` and `src/util.ts`.\n\n- Added tests for login.\n- Removed dead code.\n- Verified it works.")
         c1 = run_git(repo, "rev-parse", "HEAD").strip()
-        for c in check_claims(repo, f"{base}..{c1}"):
+        case1 = check_claims(repo, f"{base}..{c1}")
+        for c in case1:
             fired |= {f["check"] for f in c.findings}
+
+        # 1b. --markdown: a summary line, one table row per claim however hostile its text (a pipe,
+        #     a newline, an HTML comment that would hide the rest of a PR comment), the standing line.
+        hostile = Claim("Fixed `a|b.ts`\nand <!-- hidden --> it", ["fixed"], [],
+                        [{"level": "UNPROVEN", "check": "fix-without-test", "msg": "x | y"}], "summary")
+        md = claims_markdown(case1 + [hostile], f"{base[:7]}..{c1[:7]}")
+        rows = [l for l in md.splitlines() if l.startswith("| ") and not l.startswith("| #")]
+        if (re.match(r"\*\*\d+ claims: \d+ contradicted, \d+ unproven, \d+ no contradiction found\*\*", md)
+                and len(rows) == len(case1) + 1 and "<!--" not in md
+                and all(len(re.findall(r"(?<!\\)\|", r)) == 6 for r in rows)
+                and md.rstrip().endswith("does not mean it is true._") and NOT_A_VERDICT[1:] in md):
+            fired.add("markdown")
 
         # 2. Tests changed, but they import nothing that changed; a skip is added; an assertion is dropped.
         write(repo, {"src/login.ts": "import { old } from './old';\nexport function login() { return old() + 1; }\n",
@@ -774,6 +1136,94 @@ def self_test() -> int:
         if check_orphans(q, DEFAULT_ENTRIES, {"@": "."})["unreachable_share"] > 0.5:
             fired.add("missing-entry-warning")
 
+        # 7. Aliases read from tsconfig/jsconfig, with no --alias at all: a `paths` alias in a config
+        #    with comments and trailing commas, and a nested jsconfig whose alias comes through
+        #    `extends` and is relative to that config. A file imported only through an alias is live;
+        #    a file nothing imports is still an orphan.
+        ts = Path(t) / "ts"
+        ts.mkdir()
+        git(ts, "init", "-q")
+        write(ts, {
+            "tsconfig.json": '{\n  // path aliases\n  "compilerOptions": {\n    "baseUrl": ".",\n'
+                             '    "paths": { "@core/*": ["lib/core/*"], /* trailing comma next */ },\n  },\n}\n',
+            "app/page.tsx": "import { engine } from '@core/engine';\nexport default function P() { return engine(); }\n",
+            "lib/core/engine.ts": "export function engine() { return 1; }\n",
+            "lib/core/unused.ts": "export const u = 1;\n",
+            "packages/web/jsconfig.json": '{ "extends": "./jsconfig.base.json" }\n',
+            "packages/web/jsconfig.base.json": '{ "compilerOptions": { "paths": { "~ui/*": ["./src/ui/*"] } } }\n',
+            "packages/web/pages/home.js": "import Button from '~ui/button';\nexport default Button;\n",
+            "packages/web/src/ui/button.js": "export default function Button() {}\n",
+        })
+        git(ts, "add", "-A"); git(ts, "commit", "-q", "-m", "ts")
+        tres = check_orphans(ts, DEFAULT_ENTRIES + ["packages/web/pages/*"], {})
+        ts_flat = [f for r in tres["rounds"] for f in r]
+        if ts_flat == ["lib/core/unused.ts"] and not tres["named_only"]:
+            fired.add("config-alias")
+
+        # 8. A src/ layout: packages under src/ are imported by their top-level name (`mypkg.core`),
+        #    with relative (`from . import helpers`) and submodule (`from mypkg import extra`) imports.
+        sl = Path(t) / "srclayout"
+        sl.mkdir()
+        git(sl, "init", "-q")
+        write(sl, {
+            "src/mypkg/__init__.py": "",
+            "src/mypkg/cli.py": "from mypkg.core import run\nif __name__ == '__main__':\n    run()\n",
+            "src/mypkg/core.py": "from . import helpers\nfrom .models import Model\nfrom mypkg import extra\n"
+                                 "def run():\n    return helpers.h(), Model, extra.e\n",
+            "src/mypkg/helpers.py": "def h():\n    return 1\n",
+            "src/mypkg/models.py": "class Model:\n    pass\n",
+            "src/mypkg/extra.py": "e = 1\n",
+            "src/mypkg/dead.py": "d = 1\n",
+        })
+        git(sl, "add", "-A"); git(sl, "commit", "-q", "-m", "sl")
+        sres = check_orphans(sl, DEFAULT_ENTRIES, {})
+        if [f for r in sres["rounds"] for f in r] == ["src/mypkg/dead.py"] and not sres["named_only"]:
+            fired.add("python-src-root")
+
+        # 9. --smoke: a command that starts passes and one that fails doesn't; a command that hangs is
+        #    stopped at the timeout (its PID is gone afterwards); it runs the committed HEAD, not the
+        #    user's uncommitted edit, which it leaves alone; and no worktree or temp folder is left.
+        sm = Path(t) / "smoke"
+        sm.mkdir()
+        git(sm, "init", "-q")
+        write(sm, {"okmod.py": "VALUE = 1\n"})
+        git(sm, "add", "-A"); git(sm, "commit", "-q", "-m", "sm")
+        write(sm, {"okmod.py": "raise SystemExit('uncommitted edit')\n"})     # the user's dirty working tree
+        py_exe = f'"{sys.executable}"'
+        pid_file = (Path(t) / "smoke-pid.txt").as_posix()
+        good = smoke(sm, f'{py_exe} -c "import okmod"', 60)
+        bad = smoke(sm, f'{py_exe} -c "import okmod, missing_module_for_smoke"', 60)
+        hung = smoke(sm, f'{py_exe} -c "import os, time; open(\'{pid_file}\', \'w\').write(str(os.getpid())); '
+                         f'time.sleep(60)"', 3)
+
+        def pid_alive(pid: int) -> bool:
+            """Read-only: tasklist on Windows; on POSIX signal 0, counting a killed-but-unreaped zombie as dead."""
+            for _ in range(25):                      # a killed grandchild can take a moment to be reaped
+                if os.name == "nt":
+                    out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH"], capture_output=True,
+                                         text=True, timeout=30).stdout
+                    alive = str(pid) in out.split()
+                else:
+                    try:
+                        os.kill(pid, 0)
+                        stat = Path(f"/proc/{pid}/stat")
+                        alive = not (stat.exists() and stat.read_text().rsplit(")", 1)[-1].split()[0] == "Z")
+                    except OSError:
+                        alive = False
+                if not alive:
+                    return False
+                time.sleep(0.2)
+            return True
+        hung_pid = int(Path(pid_file).read_text()) if Path(pid_file).exists() else 0
+        worktrees = [l for l in run_git(sm, "worktree", "list", "--porcelain").splitlines() if l.startswith("worktree ")]
+        if (good["started"] and not bad["started"] and bad["exit_code"] not in (0, None)
+                and any("missing_module_for_smoke" in l for l in bad["tail"])
+                and hung["timed_out"] and not hung["started"] and hung_pid and not pid_alive(hung_pid)
+                and len(worktrees) == 1
+                and not any(Path(x["worktree"]).parent.exists() for x in (good, bad, hung))
+                and (sm / "okmod.py").read_text() == "raise SystemExit('uncommitted edit')\n"):
+            fired.add("smoke")
+
         orphan_fp = [f for f in flat if f in {"lib/configured.ts", "lib/live.ts", "contexts/AuthContext.tsx",
                                               "lib/sub/limits.ts", "tools/lint-paths.mjs", ".github/scripts/check.mjs",
                                               "jest.setup.js", "types/global.d.ts"}]
@@ -782,7 +1232,7 @@ def self_test() -> int:
                 "skip-added", "tests-removed", "removed-still-referenced", "fix-without-test",
                 "behaviour-claim-tests-edited", "assertion-word", "wired-but-unimported", "test-selection-changed",
                 "orphan", "twin", "orphan-despite-allowlist", "named-only", "test-only",
-                "declared-entries", "missing-entry-warning"}
+                "declared-entries", "missing-entry-warning", "config-alias", "python-src-root", "smoke", "markdown"}
     for c in sorted(expected):
         print(f"{'ok  ' if c in fired else 'MISS'} {c}")
     if false_pos:
@@ -804,6 +1254,11 @@ def main() -> int:
     ap.add_argument("--entry", action="append", help="glob for an extra entry point (repeatable), added to the defaults")
     ap.add_argument("--alias", action="append", default=[], help="import alias, e.g. @=. or @=src (repeatable)")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--markdown", action="store_true", help="claims: a summary line and a table, e.g. for a PR comment")
+    ap.add_argument("--smoke", metavar="COMMAND",
+                    help="start the app once with COMMAND in a temporary git worktree of HEAD (claims: the range's head); "
+                         "exit code 3 if it fails to start")
+    ap.add_argument("--smoke-timeout", type=float, default=120, metavar="SECONDS", help="hard timeout for --smoke (default 120)")
     ap.add_argument("--self-test", action="store_true")
     a = ap.parse_args()
     try:
@@ -812,24 +1267,43 @@ def main() -> int:
         pass
     if a.self_test:
         return self_test()
+    if a.json and a.markdown:
+        ap.error("pick one of --json and --markdown")
     repo = a.repo.expanduser().resolve()
     if a.command == "claims":
         if not a.range:
             ap.error("claims needs --range BASE..HEAD")
         extra = a.text.read_text(encoding="utf-8", errors="replace") if a.text else ""
         claims = check_claims(repo, a.range, extra)
+        s = smoke(repo, a.smoke, a.smoke_timeout, re.split(r"\.\.\.?", a.range)[-1] or "HEAD") if a.smoke else None
         if a.json:
-            print(json.dumps([{**asdict(c), "status": c.status} for c in claims], indent=2))
+            out = [{**asdict(c), "status": c.status} for c in claims]
+            print(json.dumps({"claims": out, "smoke": s} if s else out, indent=2))
+        elif a.markdown:
+            print(claims_markdown(claims, a.range), end="")
+            if s:
+                print("\n" + ("\n".join(smoke_lines(s)[:1]) if s["started"] else
+                              "**" + smoke_lines(s)[0] + "**\n\n```\n" + "\n".join(smoke_lines(s)[1:]) + "\n```"))
         else:
             print_claims(claims)
-        return 0
+            if s:
+                print_smoke(s)
+        return 3 if s and not s["started"] else 0
     if a.command == "orphans":
-        aliases = dict(x.split("=", 1) for x in a.alias) if a.alias else {"@": ".", "~": "."}
-        res = check_orphans(repo, DEFAULT_ENTRIES + (a.entry or []), aliases)
+        if a.markdown:
+            ap.error("--markdown is for the claims command")
+        aliases = dict(x.split("=", 1) for x in a.alias) if a.alias else {}
+        fallback = {} if a.alias else {"@": ".", "~": "."}
+        s = smoke(repo, a.smoke, a.smoke_timeout) if a.smoke else None
+        res = check_orphans(repo, DEFAULT_ENTRIES + (a.entry or []), aliases, fallback)
+        if s:
+            res["smoke"] = s
         print(json.dumps(res, indent=2) if a.json else "", end="")
         if not a.json:
             print_orphans(res)
-        return 0
+            if s:
+                print_smoke(s)
+        return 3 if s and not s["started"] else 0
     ap.error("give a command (claims or orphans) or --self-test")
     return 2
 

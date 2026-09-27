@@ -63,7 +63,10 @@ stop only the process you started, by its PID.
    middleware and workflows. The script's `removed-still-referenced` covers direct imports
    only.
 2. Build and type-check in `verify-after`.
-3. Run the orphan scan on `verify-after`. The removal may have orphaned the next layer.
+3. Run the orphan scan with `--smoke "<a command that loads the app and exits>"`. The smoke
+   run starts HEAD in its own temporary worktree, so a deleted file that is still loaded at
+   runtime (`importlib`, `require(variable)`) shows up as "app failed to start", which no
+   import graph can see. The removal may also have orphaned the next layer.
 4. **Delete by reference, never by name.** Two files can export the same name, and only
    one of them is live.
 

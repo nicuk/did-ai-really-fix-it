@@ -101,3 +101,10 @@ it finds; the assertions don't measure that.
   the runs.
 - **Round 1 has hints.** Its code comments say which session module is live and that nothing imports the
   legacy one. Round 2 removes them.
+
+## A large real repository: `outline/`
+
+The fixture above is small enough that a model finds everything without the script. `outline/`
+rebuilds a 2,800-file open-source app (outline/outline at a pinned commit) with a fix made in
+a dead copy behind a `~/` alias, held up by a three-deep chain nothing renders. Its README
+explains the rebuild; `evals.json` there has the prompts, assertions and results.

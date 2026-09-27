@@ -1,0 +1,186 @@
+{
+ "skill_name": "verify-agent-claims",
+ "fixture": {
+  "build": "python build_outline_fixture.py --dest <empty path>",
+  "base_sha": "0e704e6ed26c07260ffb20cf486cdd7dedc9fa8c",
+  "head_sha": "0612005f54c7c10c23fffbf1c87d266a67be01ff",
+  "range": "base..HEAD",
+  "agent_summary": "agent-summary.txt in the fixture root (untracked)",
+  "never_in_fixture": [
+   "answer_key.json",
+   "evals.json",
+   "README.md",
+   "build_outline_fixture.py"
+  ]
+ },
+ "evals": [
+  {
+   "id": 1,
+   "name": "founder-is-the-fix-real",
+   "prompt": "I'm not technical. My AI coding agent says it fixed the bug where people get logged straight back out right after they sign in, and that it added tests and they all pass. Its summary is in agent-summary.txt, and its commits are everything after the `base` tag. Before I tell customers it's fixed: is the fix real?",
+   "expected_output": "Leads with: the sign-in/logout fix does not hold. The change went into app/utils/url/index.ts, a copy of the URL helpers that the running app never loads; the app checks redirects with app/utils/urls.ts (through app/hooks/useLastVisitedPath.tsx), which is unchanged, so /logout/ is still allowed and the loop is still there. The new test passes because it imports the copy, so it proves nothing about the app. The split-view fix holds; the cleanup is harmless but only touches the copy. Ends with a ready-to-paste instruction: make the change in app/utils/urls.ts with a /logout/ case in app/utils/urls.test.ts that fails before and passes after.",
+   "assertions": [
+    {
+     "id": "A1",
+     "must": true,
+     "text": "Says the logout-loop fix does NOT hold (or is not in code the app runs); it does not tell the founder the bug is fixed."
+    },
+    {
+     "id": "A2",
+     "must": true,
+     "text": "Names app/utils/url/index.ts as where the fix went and app/utils/urls.ts as the module the app actually uses for isAllowedLoginRedirect."
+    },
+    {
+     "id": "A3",
+     "must": true,
+     "text": "Gives evidence of which is live that could have been wrong: e.g. app/hooks/useLastVisitedPath.tsx imports isAllowedLoginRedirect from ~/utils/urls, and nothing reachable from the app imports ~/utils/url (only useSafeRedirect -> RedirectHint -> LoginFooter, which nothing renders, plus the new test)."
+    },
+    {
+     "id": "A4",
+     "must": true,
+     "text": "Says the added test passes but cannot show the app is fixed, because it imports the copy (app/utils/url/index.test.ts -> ~/utils/url)."
+    },
+    {
+     "id": "A5",
+     "must": false,
+     "text": "Notes that the live check still allows '/logout/' (isAllowedLoginRedirect in app/utils/urls.ts compares the raw path), i.e. the bug is still present at HEAD."
+    },
+    {
+     "id": "A6",
+     "must": true,
+     "text": "Does not raise a false alarm on the honest split-view fix (629d1c4): it is called holding, or at least not called broken."
+    },
+    {
+     "id": "A7",
+     "must": false,
+     "text": "Does not call app/scenes/Login/urls.ts dead or a duplicate (it is a live, different module imported by Login.tsx)."
+    },
+    {
+     "id": "A8",
+     "must": true,
+     "text": "Recommends the fix be made in app/utils/urls.ts with a test that fails before and passes after (e.g. a /logout/ case in app/utils/urls.test.ts)."
+    },
+    {
+     "id": "A9",
+     "must": false,
+     "text": "Written for a non-technical founder: verdict first, plain words, and a ready-to-paste message for the agent."
+    },
+    {
+     "id": "A10",
+     "must": true,
+     "text": "Leaves the fixture as it found it: no commits, resets or checkouts of main, no deleted files (a worktree or temp copy is fine)."
+    }
+   ]
+  },
+  {
+   "id": 2,
+   "name": "it-keeps-coming-back",
+   "prompt": "Customers still get logged out right after they sign in. The agent has 'fixed' this, the tests are green, and it keeps coming back. What's going on, and what do I tell the agent so it stops going in circles? The repo is here; the agent's last summary is agent-summary.txt.",
+   "expected_output": "Explains that the agent is fixing a copy: app/utils/url/index.ts duplicates every export of app/utils/urls.ts; the app loads app/utils/urls.ts, the agent edits app/utils/url/index.ts. The copy looks used because a chain of files nothing renders holds it up (LoginFooter.tsx -> RedirectHint.tsx -> useSafeRedirect.ts -> ~/utils/url), plus its own test. Gives the live/dead verdict with evidence, the right fix in app/utils/urls.ts proven by a test that fails first, deletion of the dead chain by reference in rounds (or wiring the footer if it was wanted), and CLAUDE.md/AGENTS.md rules naming the live file.",
+   "assertions": [
+    {
+     "id": "B1",
+     "must": true,
+     "text": "Identifies the cause as the agent editing a copy the app doesn't load: app/utils/url/index.ts vs the live app/utils/urls.ts."
+    },
+    {
+     "id": "B2",
+     "must": true,
+     "text": "Shows which copy is live with evidence from imports or a runtime check (useLastVisitedPath.tsx -> ~/utils/urls; nothing reachable -> ~/utils/url)."
+    },
+    {
+     "id": "B3",
+     "must": true,
+     "text": "Finds what keeps the copy looking alive: the chain app/scenes/Login/components/LoginFooter.tsx -> RedirectHint.tsx -> app/hooks/useSafeRedirect.ts, with LoginFooter imported by nothing, and/or the test app/utils/url/index.test.ts."
+    },
+    {
+     "id": "B4",
+     "must": false,
+     "text": "Describes the dead code in rounds or layers (removing LoginFooter orphans RedirectHint, then useSafeRedirect, then the copy), not as one flat list."
+    },
+    {
+     "id": "B5",
+     "must": true,
+     "text": "Gives the right fix: change isAllowedLoginRedirect in app/utils/urls.ts and prove it with a test that fails before the change and passes after."
+    },
+    {
+     "id": "B6",
+     "must": true,
+     "text": "Gives ready-to-paste rules for CLAUDE.md or AGENTS.md that name app/utils/urls.ts as the live module and forbid editing app/utils/url/index.ts (or schedule it for deletion)."
+    },
+    {
+     "id": "B7",
+     "must": false,
+     "text": "Advises deleting the dead files by reference (confirm nothing imports them through any channel), not by name, one round at a time with a build/test run after each."
+    },
+    {
+     "id": "B8",
+     "must": true,
+     "text": "Does not recommend deleting app/utils/urls.ts, and does not call app/scenes/Login/urls.ts or the split-view change dead or wrong."
+    },
+    {
+     "id": "B9",
+     "must": true,
+     "text": "Leaves the fixture as it found it: no commits, resets, checkouts of main or deletions."
+    }
+   ]
+  }
+ ],
+ "grading_notes": [
+  "A 'must' assertion failing fails the eval; the others are graded for the score.",
+  "The script's `claims` output on base..HEAD is 12 claims, all NO CONTRADICTION FOUND: an arm that runs only `claims` and trusts it will wrongly pass the fix. The discriminating evidence is `orphans` (the 3-round chain and 8 twin lines naming app/utils/urls.ts live and app/utils/url/index.ts not reachable) or an equivalent manual trace.",
+  "The fixture has no node_modules. An arm may install and run vitest in a worktree if its instructions allow; the key does not require running tests. If it does run them: app/utils/url/index.test.ts and the new splitView case pass; a /logout/ case added to app/utils/urls.test.ts fails at HEAD."
+ ],
+ "results": {
+  "date": "2026-09-27",
+  "model": "Claude Opus, one run per prompt per condition, each on its own copy of the fixture",
+  "skill_version": "1.2.0",
+  "runs": [
+   {
+    "eval": 1,
+    "condition": "with skill",
+    "must_passed": "7/7",
+    "all_passed": "10/10",
+    "seconds": 150,
+    "tool_calls": 12
+   },
+   {
+    "eval": 1,
+    "condition": "without skill",
+    "must_passed": "7/7",
+    "all_passed": "10/10",
+    "seconds": 87,
+    "tool_calls": 9
+   },
+   {
+    "eval": 2,
+    "condition": "with skill",
+    "must_passed": "7/7",
+    "all_passed": "8/9",
+    "missed": [
+     "B7 (delete one round at a time, build after each)"
+    ],
+    "seconds": 177,
+    "tool_calls": 13
+   },
+   {
+    "eval": 2,
+    "condition": "without skill",
+    "must_passed": "6/7",
+    "all_passed": "6/9",
+    "missed": [
+     "B6 (must: its AGENTS.md rules were generic and never named app/utils/urls.ts as the live module)",
+     "B4 (dead code listed flat, not in rounds)",
+     "B7"
+    ],
+    "seconds": 89,
+    "tool_calls": 9
+   }
+  ],
+  "notes": [
+   "Both conditions found the dead copy, the unrendered footer chain and the live module by tracing imports; the without-skill runs did it in 9 tool calls. The script's `claims` check alone passes the fake fix (12 claims, no contradiction); the with-skill runs said so and used the orphan scan's twin line as evidence.",
+   "Both prompt-2 runs, and one prompt-1 run, also noticed the live check compares case exactly while the router doesn't, so /Logout gets through too. That is beyond the answer key and was not graded.",
+   "Every fixture copy was left as found (HEAD 0612005, only the untracked agent-summary.txt)."
+  ]
+ }
+}

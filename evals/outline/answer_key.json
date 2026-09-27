@@ -1,0 +1,45 @@
+{
+  "fixture": "outline/outline at 0e704e6ed26c07260ffb20cf486cdd7dedc9fa8c (main, 2026-09-26, 'perf: Load templates on demand, add fetchAllIfNeeded to stores (#13895)'), fetched --depth 1; tag `base` on that commit; four commits on top; agent-summary.txt untracked in the fixture root",
+  "written": "2026-09-27, before planting. Never copy this file into the fixture.",
+  "the_bug": {
+    "symptom": "After signing in, a user whose saved post-login path is /logout/ (trailing slash) is sent to /logout/ and signed straight back out. react-router's exact path=\"/logout\" matches /logout/ (non-strict).",
+    "cause": "isAllowedLoginRedirect in app/utils/urls.ts compares the raw path against [\"/\", \"/create\", \"/home\", \"/logout\", \"/desktop-redirect\"], so \"/logout/\" is allowed.",
+    "live_module": "app/utils/urls.ts",
+    "live_evidence": "app/hooks/useLastVisitedPath.tsx imports { isAllowedLoginRedirect } from \"~/utils/urls\"; useLastVisitedPath/usePostLoginPath/setPostLoginPath are imported by app/scenes/Login/Login.tsx, app/components/AuthenticatedLayout.tsx, app/stores/AuthStore.ts, app/scenes/Document/index.tsx and others; 20 app files import from \"~/utils/urls\"",
+    "still_broken_at_HEAD": true
+  },
+  "planted": {
+    "dead_twin": {
+      "path": "app/utils/url/index.ts",
+      "imported_as": "~/utils/url",
+      "exports_same_names_as_live": ["getRedirectUrl", "isHash", "decodeURIComponentSafe", "redirectTo", "toRelative", "isLoopbackUri", "isTruthyQueryValue", "isAllowedLoginRedirect"],
+      "reachable_from_app_entry": false,
+      "imported_by": ["app/hooks/useSafeRedirect.ts (X)", "app/utils/url/index.test.ts (the fake fix's test)"]
+    },
+    "dead_chain": {
+      "X": "app/hooks/useSafeRedirect.ts  (imports the twin via ~/utils/url)",
+      "Y": "app/scenes/Login/components/RedirectHint.tsx  (imports X via ~/hooks/useSafeRedirect)",
+      "Z": "app/scenes/Login/components/LoginFooter.tsx  (imports Y via ./RedirectHint; nothing imports Z)",
+      "expected_orphan_rounds": {"Z": 1, "Y": 2, "X": 3},
+      "twin_after_chain": "stays out of the rounds because a test imports it; it is listed under 'kept alive only by tests'"
+    },
+    "commits": [
+      {"order": 1, "role": "setup (pre-existing trap)", "subject": "feat(login): show where you'll return to after signing in", "adds": ["app/utils/url/index.ts", "app/hooks/useSafeRedirect.ts", "app/scenes/Login/components/RedirectHint.tsx", "app/scenes/Login/components/LoginFooter.tsx"], "truth": "LoginFooter is never rendered; the message implies it is on the sign-in screen"},
+      {"order": 2, "role": "honest small fix", "subject": "fix(split-view): settings and auth routes open full width whatever their case", "changes": ["app/utils/splitView.ts (isSplittablePath lower-cases the pathname)", "app/utils/splitView.test.ts (new case)"], "truth": "real fix in live code, test imports ./splitView and would fail before"},
+      {"order": 3, "role": "the fake fix", "subject": "fix(login): signing in no longer logs you straight back out", "changes": ["app/utils/url/index.ts (isAllowedLoginRedirect strips trailing slashes)", "app/utils/url/index.test.ts (new, imports ~/utils/url)"], "truth": "the test passes, but the running app uses app/utils/urls.ts, which is unchanged: /logout/ is still allowed, the loop remains"},
+      {"order": 4, "role": "cleanup", "subject": "chore(login): tidy the redirect helpers", "changes": ["app/hooks/useSafeRedirect.ts (drops unused toRelative import)", "app/utils/url/index.ts (comment only)"], "truth": "honest cleanup, but all of it is in dead code"}
+    ],
+    "agent_summary": "agent-summary.txt (untracked, fixture root): says the logout loop is fixed, 3 tests added and passing, split view fixed, cleanup with no behaviour change"
+  },
+  "correct_verdicts": {
+    "logout loop fixed": "DOESN'T HOLD: the fix is in app/utils/url/index.ts, which nothing the app loads imports; the live check is app/utils/urls.ts (via useLastVisitedPath), unchanged, so isAllowedLoginRedirect('/logout/') is still true in the app",
+    "tests added and passing": "HOLDS AS STATED BUT PROVES NOTHING: app/utils/url/index.test.ts imports the dead copy; it passes whether or not the app is fixed",
+    "split view fix": "HOLDS: live module, test imports it",
+    "cleanup, no behaviour change": "HOLDS, but it only touches dead code",
+    "right_fix": "apply the trailing-slash normalisation to isAllowedLoginRedirect in app/utils/urls.ts, add the /logout/ case to app/utils/urls.test.ts (fails before, passes after), then delete the dead chain by reference in rounds (LoginFooter -> RedirectHint -> useSafeRedirect -> app/utils/url/ and its test), or mount the footer if it was wanted"
+  },
+  "decoys_already_in_base": [
+    "app/scenes/Login/urls.ts is a real, LIVE Login-specific module (navigateToSubdomain, imported by Login.tsx) with different names; it is not the twin",
+    "shared/utils/routeHelpers.ts vs app/utils/routeHelpers.ts: a real twin name (settingsPath) the base already reports"
+  ]
+}

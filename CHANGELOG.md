@@ -66,7 +66,11 @@ data the fixes were tuned on.
   by tests", so a cut-off list never hides them.
 - The unreachable-code warning is per app, at 25% (was 50% for the whole repo), and counts code
   only tests reach; an app under 10 files warns only past half*.
-- The self-test has 54 checks (was 23). Each new one has a case that must fire and one that
+- "Added tests" where no test file changed, but the changed source adds inline tests or
+  extends a file that holds them (a Rust `#[test]`, a Go `TestX`, a Python `self_test`), is
+  unproven, not contradicted. Found when this
+  release's own pull request was checked by the Action.
+- The self-test has 55 checks (was 23). Each new one has a case that must fire and one that
   must not, and was broken once on purpose to prove its case fails.
 
 ## 1.1.0 (2026-09-27)

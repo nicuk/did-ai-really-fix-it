@@ -203,6 +203,11 @@ def same_line(a: str, b: str) -> bool:
     """Equal but for whitespace and a trailing comma: `"test": "x"` -> `"test": "x",` changes nothing."""
     return re.sub(r"\s+", "", a).rstrip(",") == re.sub(r"\s+", "", b).rstrip(",")
 PACKAGE_TEST_LINE = re.compile(r"\btest|jest|vitest|mocha|jasmine|karma|playwright|cypress|pytest|\bava\b|\btap\b", re.I)
+# A test written inside a source file: Rust #[test], a Go TestX, a Python test_/self_test function,
+# a JS it()/test() block, or a doctest. "Added tests" with only these changed is unproven, not contradicted,
+# whether the diff adds the test itself or extends a file that already holds tests.
+INLINE_TEST = re.compile(r"#\[(?:cfg\()?test\)?\]|^\s*(?:async\s+)?def\s+(?:test_\w*|_?self_test\w*)\s*\(|"
+                         r"^\s*func\s+Test[A-Z_]\w*\s*\(|^\s*(?:it|test)\s*\(\s*['\"`]|^\s*>>>\s", re.M)
 ASSERT_LINE = re.compile(r"\bexpect\s*\(|\bassert\b|\bassert\w*\s*\(|\.should\b|\btoMatchSnapshot\b")
 
 
@@ -559,7 +564,13 @@ def evaluate(repo: Path, rng: str, claims: list[Claim], message: str = "") -> li
             elif changed_claim and not any(h in diff.touched for h in hits):
                 add("CONTRADICTED", "file-not-in-diff", f"the claim says `{p}` changed, but this range never touched it")
         if "tests-added" in c.kinds and not tests_changed:
-            add("CONTRADICTED", "tests-claimed-none-changed", "tests are claimed, but no test file was added or changed in the range")
+            inline = sorted(p for p, ls in diff.added.items() if ls and not is_test(p)
+                            and (any(INLINE_TEST.search(l) for l in ls) or INLINE_TEST.search(head_read(p))))
+            if inline:
+                add("UNPROVEN", "tests-claimed-none-changed",
+                    f"no test file changed; the tests look inline in {', '.join(inline[:3])}: check they run in CI and can fail")
+            else:
+                add("CONTRADICTED", "tests-claimed-none-changed", "tests are claimed, but no test file was added or changed in the range")
         if ("tests-added" in c.kinds or "fixed" in c.kinds) and tests_changed and diff.sources():
             if not any(is_linked(t) for t in sorted(tests_changed)):
                 add("UNPROVEN", "tests-never-import-changed",
@@ -1549,6 +1560,14 @@ def _self_test_checks() -> int:
                   "docs/generated/prompt.spec.json": '{"rules": []}\n'}, "Added tests for pad.")
         if found(x, "tests-claimed-none-changed") and not found(x, "tests-never-import-changed"):
             fired.add("test-path-code-ext")
+        # Tests written inside the changed source (a self-test, Rust #[test]) are unproven, not contradicted.
+        inl = step({"tools/pad.py": "def pad(s):\n    return s.strip()\n\n\ndef self_test():\n    assert pad(' a ') == 'a'\n"},
+                   "Added tests for pad.")
+        grown = step({"tools/pad.py": "def pad(s):\n    return s.strip()\n\n\ndef self_test():\n    assert pad(' a ') == 'a'\n"
+                                      "    assert pad('b ') == 'b'\n"}, "Added tests for trailing spaces.")
+        if (x and [f["level"] for f in found(grown, "tests-claimed-none-changed")] == ["UNPROVEN"] and all(f["level"] == "CONTRADICTED" for f in found(x, "tests-claimed-none-changed"))
+                and [f["level"] for f in found(inl, "tests-claimed-none-changed")] == ["UNPROVEN"]):
+            fired.add("inline-tests")
         # A skip replaced by an assertion and a narrower skip, in one hunk, is not a skip added.
         step({"src/render.py": "def run():\n    return 0\n",
               "tests/test_render.py": "import shutil\nimport pytest\nfrom src import render\n\n\ndef _render():\n"
@@ -1943,7 +1962,7 @@ def _self_test_checks() -> int:
                 "declared-entries", "missing-entry-warning", "config-alias", "python-src-root", "smoke", "markdown",
                 # precision fixes from a real measurement (2026-09-27), each with a must-fire and a must-not-fire case
                 "path-token", "missing-file-verb", "missing-file-elsewhere", "squash-rename", "e2e-linked",
-                "noncode-linked", "test-path-code-ext", "renamed-test-paired", "skip-net", "selection-noise",
+                "noncode-linked", "test-path-code-ext", "inline-tests", "renamed-test-paired", "skip-net", "selection-noise",
                 "once-per-commit", "proof-named", "case-sensitive-entry", "app-root-entries", "html-module-entry",
                 "sveltekit-entries", "svelte-lib-alias", "markup-imports", "storybook-entries", "ts-esm-js-import",
                 "workspace-package", "test-setup-entries", "python-package-roots", "module-string-entry", "nuxt-app",

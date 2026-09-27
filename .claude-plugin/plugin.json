@@ -1,0 +1,18 @@
+{
+  "name": "cairn-verify",
+  "displayName": "Cairn Verify — did the AI really fix it?",
+  "version": "1.0.0",
+  "description": "Checks what your coding agent said it did — fixed, tested, removed, wired, no behaviour change — against the repository, and gives each claim a verdict in plain words: holds, doesn't hold, or can't tell. Unsticks an agent going in circles by finding the live and dead copies it keeps confusing. Read-only, self-testing script.",
+  "author": { "name": "Nic Chin", "url": "https://nicchin.com" },
+  "homepage": "https://github.com/nicuk/did-ai-really-fix-it#readme",
+  "repository": "https://github.com/nicuk/did-ai-really-fix-it",
+  "documentationUrl": "https://github.com/nicuk/did-ai-really-fix-it#readme",
+  "supportUrl": "https://github.com/nicuk/did-ai-really-fix-it/issues",
+  "privacyPolicyUrl": "https://github.com/nicuk/did-ai-really-fix-it/blob/main/PRIVACY.md",
+  "termsOfServiceUrl": "https://github.com/nicuk/did-ai-really-fix-it/blob/main/LICENSE",
+  "license": "MIT",
+  "keywords": [
+    "code-review", "ai-code-review", "pr-review", "verify", "claims", "ai-agent", "vibe-coding",
+    "ai-built-apps", "dead-code", "tests-pass", "going-in-circles", "cursor", "codex", "founder"
+  ]
+}

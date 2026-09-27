@@ -1,0 +1,29 @@
+# Backs the two claims the README makes about the script, so they fail loudly instead of
+# rotting: every check fires on a planted defect, and the script imports nothing that can
+# reach the network.
+name: self-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  self-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Every check fires on a planted defect
+        run: python skills/verify-agent-claims/scripts/verify_claims.py --self-test
+      - name: The script imports nothing that can reach the network
+        run: |
+          if grep -nE '^\s*(import|from)\s+(socket|urllib|http|requests|httpx|aiohttp|ftplib|smtplib)\b' \
+               skills/verify-agent-claims/scripts/verify_claims.py; then
+            echo "::error::verify_claims.py imports a networking module; PRIVACY.md says it makes no network requests"
+            exit 1
+          fi

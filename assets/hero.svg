@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="Three stones stack into a cairn: did the AI really fix it?">
+<style>
+.drop { animation: drop .7s cubic-bezier(.2,.9,.3,1.25) both; }
+@keyframes drop { from { transform: translateY(-900px); opacity: 0; } 60% { opacity: 1; } to { transform: none; opacity: 1; } }
+.glow { animation: glow 3.4s ease-in-out 1.6s infinite; }
+@keyframes glow { 0%,100% { opacity: 0; } 50% { opacity: .45; } }
+.fade { animation: fade .9s ease-out both; }
+@keyframes fade { from { opacity: 0; transform: translateX(-14px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; } }
+</style>
+<defs><linearGradient id="gbottom" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#12204F"/><stop offset="0.55" stop-color="#1B3A8C"/><stop offset="1" stop-color="#2366E0"/></linearGradient><linearGradient id="gmiddle" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1E90FF"/><stop offset="1" stop-color="#0050E6"/></linearGradient><linearGradient id="gtop" x1="0.6" y1="0" x2="0.4" y2="1"><stop offset="0" stop-color="#7DD6FF"/><stop offset="1" stop-color="#0A74FF"/></linearGradient><filter id="blur" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="40"/></filter></defs>
+<rect x="1" y="1" width="1278" height="398" rx="28" fill="#FFFFFF" stroke="#DCE5F5" stroke-width="2"/>
+<g transform="translate(40 -40) scale(0.4)">
+  <ellipse class="glow" cx="620" cy="380" rx="220" ry="120" fill="#6CCBFF" opacity="0" filter="url(#blur)"/>
+  <g class="drop" style="animation-delay:0.15s"><path d="M252,915 C255,840 360,770 520,735 C660,705 820,700 920,745 C1000,780 1015,900 960,985 C900,1045 700,1045 560,1042 C400,1040 250,1010 252,915 Z" fill="url(#gbottom)"/></g><g class="drop" style="animation-delay:0.50s"><path d="M315,660 C310,560 390,508 520,506 C650,504 820,520 880,570 C930,615 880,690 760,720 C650,748 520,760 430,748 C360,740 318,705 315,660 Z" fill="url(#gmiddle)"/></g><g class="drop" style="animation-delay:0.85s"><path d="M440,430 C430,360 560,270 700,248 C790,235 820,320 790,390 C760,460 690,500 590,500 C500,500 445,470 440,430 Z" fill="url(#gtop)"/></g>
+</g>
+<g class="fade" style="animation-delay:1.2s">
+  <text x="480" y="170" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="46" font-weight="700" fill="#111827">Did the AI</text>
+  <text x="480" y="226" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="46" font-weight="700" fill="#0A6CFF">really fix it?</text>
+</g>
+<g class="fade" style="animation-delay:1.6s">
+  <text x="482" y="282" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#5B6B85">Every claim your coding agent made, checked against the repo.</text>
+  <text x="482" y="314" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="22" fill="#5B6B85">Holds, doesn't hold, or can't tell, in words a founder can act on.</text>
+</g>
+</svg>

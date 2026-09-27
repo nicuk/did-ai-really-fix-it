@@ -1,0 +1,12 @@
+{
+  "name": "cairn-verify",
+  "description": "Cairn Verify: check what your coding agent said it did, claim by claim.",
+  "owner": { "name": "Nic Chin", "url": "https://nicchin.com" },
+  "plugins": [
+    {
+      "name": "cairn-verify",
+      "source": "./",
+      "description": "Every claim your coding agent made, checked against the repo: holds, doesn't hold, or can't tell."
+    }
+  ]
+}

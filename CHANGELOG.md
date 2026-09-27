@@ -19,6 +19,9 @@ Each release raises `version` in `.claude-plugin/plugin.json` and is tagged `vX.
 - A case study, linked from the Evidence section.
 
 **Fixed**
+- A path under a dot-folder (`.github/…`, `.claude-plugin/…`) was reported as "exists nowhere",
+  because `lstrip("./")` strips characters, not the `./` prefix. Found by the Action on this
+  release's own pull request; the self-test now plants a dot-folder claim.
 - The self-test's temporary git repos could be redirected into the real repository when it
   ran inside a git hook, which exports `GIT_DIR`: that once committed its fixtures onto
   `main`. Every git call now drops inherited `GIT_*` variables, and the self-test runs

@@ -243,7 +243,7 @@ def read_diff(repo: Path, rng: str) -> Diff:
 
 
 def resolve_claimed(path: str, files: set[str]) -> list[str]:
-    p = path.lstrip("./")
+    p = re.sub(r"^(\./)+|^/", "", path)      # a "./" or "/" prefix; lstrip("./") would eat ".github"
     if p in files:
         return [p]
     return sorted(f for f in files if f.endswith("/" + p) or f == p)
@@ -587,7 +587,7 @@ def resolve_spec(spec: str, importer: str, files: set[str], aliases: list[Alias]
             cands.append(spec)                    # python dotted module, or a bare repo path
             cands.append("src/" + spec)           # src layout: top-level Python packages live under src/
     for c in cands:
-        c = c.lstrip("./") if not c.startswith("..") else c
+        c = re.sub(r"^(\./)+", "", c) if not c.startswith("..") else c
         for suffix in ("", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py",
                        "/index.ts", "/index.tsx", "/index.js", "/index.jsx", "/__init__.py"):
             if c + suffix in files:
@@ -1042,10 +1042,13 @@ def _self_test_checks() -> int:
 
         # 4. A claim the diff supports must not be contradicted (false-positive guard). The body is
         #    hard-wrapped, and it names an untouched file as context, which is not a claim.
+        #    It also changes a file under a dot-folder: `.github/...` once read as "exists nowhere",
+        #    because lstrip("./") strips characters, not the "./" prefix (found by the PR Action).
         write(repo, {"src/util.ts": "export function pad(s: string) { return s.trim(); }\n",
-                     "tests/util.test.ts": "import { pad } from '../src/util';\nit('pads', () => { expect(pad(' a')).toBe('a'); });\n"})
+                     "tests/util.test.ts": "import { pad } from '../src/util';\nit('pads', () => { expect(pad(' a')).toBe('a'); });\n",
+                     ".github/workflows/ci.yml": "on: push\n"})
         git(repo, "add", "-A"); git(repo, "commit", "-q", "-m",
-            "Fixed pad in `src/util.ts` and added a test for it.\n\nThe live login path is src/login.ts, and\n"
+            "Fixed pad in `src/util.ts` and added a test for it. Added `.github/workflows/ci.yml`.\n\nThe live login path is src/login.ts, and\n"
             "none of it is touched here. Kept: src/old.ts, which login\nstill imports.")
         c4 = run_git(repo, "rev-parse", "HEAD").strip()
         clean = check_claims(repo, f"{c3}..{c4}")

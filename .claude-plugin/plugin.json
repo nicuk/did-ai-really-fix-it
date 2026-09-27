@@ -1,7 +1,7 @@
 {
   "name": "cairn-verify",
   "displayName": "Cairn Verify — did the AI really fix it?",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Checks what your coding agent said it did — fixed, tested, removed, wired, no behaviour change — against the repository, and gives each claim a verdict in plain words: holds, doesn't hold, or can't tell. Unsticks an agent going in circles by finding the live and dead copies it keeps confusing. Read-only, self-testing script.",
   "author": { "name": "Nic Chin", "url": "https://nicchin.com" },
   "homepage": "https://github.com/nicuk/did-ai-really-fix-it#readme",

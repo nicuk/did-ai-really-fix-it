@@ -7,7 +7,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-16A34A?style=flat-square)](LICENSE)
 [![Privacy: nothing collected](https://img.shields.io/badge/privacy-nothing_collected-6CCBFF?style=flat-square)](PRIVACY.md)
 
-**[Install](#install)** · **[What you get](#what-you-get)** · **[The script](#the-script)** · **[Privacy](#privacy)**
+**[Install](#install)** · **[What you get](#what-you-get)** · **[The script](#the-script)** · **[Privacy](#privacy)** · **[The Cairn family](#the-cairn-family)**
 
 **Your coding agent says "fixed, tested, all green". Cairn Verify checks each of those words
 against the repository and tells you, in plain language, which ones are true.**
@@ -33,7 +33,18 @@ hold**, or **can't tell**, with the one command that would settle it.
 
 *Real output, from a small made-up app whose agent overclaims.*
 
-Ask it in plain words:
+## Who it's for
+
+If you build with Claude Code, Cursor or Codex and can't read every diff (or don't have
+time to), you have probably seen one of these:
+
+- The agent says "done", and the same bug is back a week later.
+- The tests are green and the feature is still broken.
+- It has "fixed" the same thing three times.
+- There are two files with the same name, and nobody's sure which one the app uses.
+
+None of this means the agent is useless. It means its report and the repository have
+drifted apart. You don't need to read the code to find out where. Ask in plain words:
 
 - *"My agent says it fixed the login bug and all tests pass. Can I trust it and merge?"*
 - *"Claude has fixed this bug three times and it's still broken. What's going on?"*
@@ -128,6 +139,19 @@ The incidents behind every check are in `skills/verify-agent-claims/references/i
 
 Nothing is collected. See [PRIVACY.md](PRIVACY.md).
 
+## The Cairn family
+
+Three plugins built on one principle: **a claim with an enforcer stays true; a claim with
+only an author rots.** Each one checks a different kind of claim.
+[The principles, the evidence and the design decisions](https://github.com/nicuk/cairn) are
+in one place.
+
+| Plugin | The question it answers |
+|---|---|
+| [Cairn Memory](https://github.com/nicuk/claude-md-memory-architecture) | Is what your agents remember cheap to load, and still true? |
+| [Cairn Signals](https://github.com/nicuk/llm-silent-failure-audit) | Are the numbers your AI product shows real? |
+| **Cairn Verify** (this one) | Did the AI really fix it? |
+
 ## Who made this
 
 Built by [Nic Chin](https://nicchin.com/?ref=cairn-verify), who reviews apps built with AI
@@ -135,12 +159,6 @@ coding tools. If this check showed that your agent's reports can't be taken at f
 the rest of the code it wrote may need the same look. That's what the
 [AI-Built App Audit](https://nicchin.com/vibe-coded-app-audit?ref=cairn-verify) is for. The
 plugin is free and complete either way. Nothing in it is held back.
-
-Also in the Cairn family:
-[Cairn Memory](https://github.com/nicuk/claude-md-memory-architecture), for agent memory
-that stays true, and
-[Cairn Signals](https://github.com/nicuk/llm-silent-failure-audit), for whether an AI
-product's numbers are real.
 
 ## License
 

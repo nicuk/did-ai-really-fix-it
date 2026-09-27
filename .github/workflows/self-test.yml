@@ -27,3 +27,9 @@ jobs:
             echo "::error::verify_claims.py imports a networking module; PRIVACY.md says it makes no network requests"
             exit 1
           fi
+      - name: The skill's frontmatter parses as strict YAML
+        # A description containing ": " once passed `claude plugin validate` and still broke
+        # the skill loader, so the parse is checked here, strictly.
+        run: |
+          pip install --quiet pyyaml
+          python .github/scripts/check_frontmatter.py

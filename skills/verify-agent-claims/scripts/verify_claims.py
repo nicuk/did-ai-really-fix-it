@@ -78,9 +78,15 @@ CLAIM_KINDS = [
     ("tests-pass", re.compile(r"\b(all\s+)?(the\s+)?tests?\s+(now\s+)?(pass|passes|passing|green)\b|\bsuite\s+(is\s+)?(passes|passing|green)\b|\bci\s+(is\s+)?green\b", re.I)),
     ("no-behaviour-change", re.compile(r"\bno\s+(behaviou?r(al)?|functional)\s+change|\bpure(ly)?\s+refactor|\brefactor(ed|ing)?\s+only\b", re.I)),
     ("removed", re.compile(r"\b(remov(e|ed|es|ing)|delet(e|ed|es|ing)|dead\s+code|unused|clean(ed)?\s+up)\b", re.I)),
-    ("fixed", re.compile(r"\b(fix(ed|es)?|resolv(e|ed|es)|solv(ed|es)|patch(ed)?)\b", re.I)),
+    # A fix CLAIM, not the word: "Fixed the bug", "fix(auth): …", "this fixes the crash".
+    # Not "thresholds are fixed", "resolves to nothing", "the fix exited" (tested on real commits).
+    ("fixed", re.compile(r"^(fix(ed|es)?|resolv(ed|es)|patch(ed|es)?)\b(?!\s+(to|at|before|after|by)\b)|^fix(\([^)]*\))?!?:"
+                         r"|\b(i|we|this( commit| change| pr)?|it|the agent)\s+(fix(ed|es)?|resolv(ed|es)|patch(ed|es)?)\b"
+                         r"|\b(fix(ed|es)?|resolv(ed|es)|patch(ed|es)?)\s+(the|a|an|this|that|its|our)\s", re.I)),
     ("wired", re.compile(r"\b(wired|hooked\s+up|now\s+(calls|called|uses)|called\s+by|integrated|connected)\b", re.I)),
 ]
+NAMES_ITS_PROOF = re.compile(r"\b(verified|confirmed|proved|proven|checked)\s+(by|with|via|using|against)\b|\b(ran|running|measured|"
+                             r"\d+\s*(of|/)\s*\d+|output|exit code|red then green|fails? (before|without))\b", re.I)
 ASSERTION_WORD = re.compile(r"\b(verified|confirmed|tested manually|works( now| correctly| as expected)?|always|fully|everywhere|all (cases|paths|callers))\b", re.I)
 PATH_TOKEN = re.compile(r"`([^`\s]+\.[A-Za-z0-9]{1,6})`|(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.(?:tsx?|jsx?|mjs|cjs|py|json|ya?ml|sql|md|css|toml))\b")
 SKIP_MARKER = re.compile(r"\b(it|test|describe)\.(skip|only|todo)\s*\(|\bx(it|describe|test)\s*\(|@pytest\.mark\.(skip|xfail)|pytest\.skip\(|\.skipIf\(|@unittest\.skip")
@@ -155,7 +161,8 @@ def claimed_changed(sentence: str, path: str) -> bool:
 def classify(sentence: str) -> Claim:
     kinds = [k for k, rx in CLAIM_KINDS if rx.search(sentence)]
     paths = [a or b for a, b in PATH_TOKEN.findall(sentence)]
-    if ASSERTION_WORD.search(sentence):
+    # "Verified by interrupting a run" names its own proof; "Verified it works" doesn't.
+    if ASSERTION_WORD.search(sentence) and not NAMES_ITS_PROOF.search(sentence):
         kinds.append("assertion-word")
     return Claim(sentence, kinds, paths)
 
@@ -681,6 +688,15 @@ def self_test() -> int:
         c4 = run_git(repo, "rev-parse", "HEAD").strip()
         clean = check_claims(repo, f"{c3}..{c4}")
         false_pos = [f for c in clean for f in c.findings]
+
+        # 4b. Prose that uses "fixed", "resolves" and "verified" without claiming an unproven fix
+        #     (sentences taken from real commits that the first version wrongly flagged).
+        write(repo, {"README.md": "notes\n"})
+        git(repo, "add", "-A"); git(repo, "commit", "-q", "-m",
+            "Document the send path\n\nThresholds are fixed before sending. The old section reference resolves to\n"
+            "nothing, so it goes. Verified by interrupting a run on purpose: a partial artefact landed.")
+        c4b = run_git(repo, "rev-parse", "HEAD").strip()
+        false_pos += [f for c in check_claims(repo, f"{c4}..{c4b}") for f in c.findings]
 
         # 5. Orphans in rounds, a config that names a file by path, and a live/dead twin.
         o = Path(t) / "o"

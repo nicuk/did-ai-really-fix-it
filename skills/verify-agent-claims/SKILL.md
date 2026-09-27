@@ -65,6 +65,14 @@ It is a **locator, not a judge**. It says CONTRADICTED, UNPROVEN or NO CONTRADIC
 and none of those is a verdict until you've read the code. A claim with no contradiction
 can still be false: the script can't run the app.
 
+`--markdown` prints the same result as a summary line and a table, ready for a PR comment.
+The repository ships `.github/workflows/verify-claims.yml`, which does that on every pull
+request: it checks the commits and the PR description and keeps one comment up to date. It
+reports and never blocks a merge; it fails only if the script itself errors. Other
+repositories can call it with `uses: nicuk/did-ai-really-fix-it/.github/workflows/verify-claims.yml@main`
+(the file's header has the snippet). Offer it when the user keeps asking the same question
+about every PR, and add it only if they want it.
+
 **Always run the orphan scan as well** (Mode 2, step 1), even when nobody says "stuck". A
 fix whose changed file is orphaned, kept alive only by tests, or the unreachable half of a
 twin is a fix in dead code: its own test passes, and the running app never sees it. The
@@ -142,7 +150,8 @@ agent is working in a dead copy of the thing that is broken.
 ### 1. Find what's live and what's dead
 
 ```bash
-python <skill-dir>/scripts/verify_claims.py orphans --repo <repo> [--alias @=src] [--entry "glob" ...]
+python <skill-dir>/scripts/verify_claims.py orphans --repo <repo> [--alias @=src] [--entry "glob" ...] \
+  [--smoke "python -c \"import app.main\""]
 ```
 
 It builds the import graph and reports:
@@ -162,10 +171,26 @@ names in `main`, `bin` or `scripts`. Pass `--entry` to add others (workers, cron
 If most of the code comes out unreachable, the script warns: an entry point is missing.
 Fix that before believing the result.
 
+Import aliases are read automatically from every `tsconfig.json` / `jsconfig.json` (and
+`tsconfig.*.json`): `compilerOptions.paths`, `baseUrl` and relative `extends`, each applying
+to the files under its own folder. The run prints the aliases it read. `--alias` adds more;
+`@` and `~` for the repo root are assumed only when no `--alias` is given. Python packages
+under `src/` resolve by their top-level name, and relative imports (`from .models import x`)
+are followed.
+
 The script says "unreachable", not "unused". It can't follow an import built from a string
 at runtime (`importlib.import_module("app." + name)`, `require(variable)`), a plugin system
-or another service. **Before deleting anything, import or start the app once** in a
-worktree: a file the scan calls dead but the app loads will fail right there.
+or another service. **Before deleting anything, start the app once.** `--smoke "COMMAND"`
+does it safely: it adds a temporary `git worktree` of HEAD in the system temp folder (never
+inside the user's checkout, never on their branch), runs COMMAND there under a timeout
+(`--smoke-timeout`, default 120 s), reports **app starts** or **app failed to start** with
+the last lines of output, and removes the worktree even on failure or timeout. On a timeout
+it stops only the process it started, by PID or process group. If the app fails to start,
+the scan's conclusions can't be trusted until it does: a file it calls dead may be loaded at
+runtime, or the app is already broken. Pick a command that exits once the app has loaded (an
+import, a build, one request), not a server that runs forever. The worktree has committed
+code only, with no `node_modules` or virtualenv, so include the install step if the app
+needs one (`--smoke "npm ci && npm run build"`). The exit code is 3 when it fails to start.
 
 ### 2. Prove which one runs
 
@@ -182,9 +207,9 @@ Give the founder three things:
 1. **The verdict:** which copy is live, which is dead, and the evidence.
 2. **Deletion by reference, not by name:** delete the dead copy only after confirming
    nothing imports it through any channel (alias import, relative import, `require`, dynamic
-   `import()`, path strings in configs). Re-run the orphan scan after each deletion, since
-   removing one layer often orphans the next. Delete in one commit per round, and run the
-   build and tests after each.
+   `import()`, path strings in configs). Re-run the orphan scan after each deletion, with
+   `--smoke`, since removing one layer often orphans the next. Delete in one commit per
+   round, and run the build and tests after each.
 3. **Rules for the agent**, for `CLAUDE.md` or `AGENTS.md`, so it doesn't happen again:
 
 ```markdown

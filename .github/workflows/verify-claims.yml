@@ -1,0 +1,109 @@
+# Checks what a pull request says it did against what it changed, and keeps ONE comment on the
+# PR up to date with the result. It reports; it doesn't gate: findings never fail the check,
+# but the job fails if the script itself errors, so a broken check can't pass as a clean one.
+#
+# Use it in another repository by calling it (the caller's job needs the same permissions):
+#
+#   on:
+#     pull_request:
+#       types: [opened, synchronize, edited, reopened]
+#   jobs:
+#     verify-claims:
+#       uses: nicuk/did-ai-really-fix-it/.github/workflows/verify-claims.yml@main
+#       permissions:
+#         contents: read
+#         pull-requests: write
+#
+# Pin a tag or commit instead of @main, and pass the same one as `cairn_verify_ref`.
+name: verify-claims
+
+on:
+  pull_request:
+    types: [opened, synchronize, edited, reopened]
+  workflow_call:
+    inputs:
+      cairn_verify_ref:
+        description: Which version of nicuk/did-ai-really-fix-it (tag, branch or commit) supplies the script
+        type: string
+        default: main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  verify-claims:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    concurrency:
+      group: cairn-verify-${{ github.repository }}-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      # The default pull_request checkout is the merge of the PR into its base, so
+      # origin/<base>..HEAD is exactly the PR's commits (merge commits are skipped by the script).
+      - uses: actions/checkout@v4
+        with:
+          path: pr
+          fetch-depth: 0
+
+      # Called from another repository: fetch the script from this one. Run on this repository's
+      # own PRs, the PR's copy of the script is used, so a PR that breaks the script fails here.
+      - if: ${{ inputs.cairn_verify_ref }}
+        uses: actions/checkout@v4
+        with:
+          repository: nicuk/did-ai-really-fix-it
+          ref: ${{ inputs.cairn_verify_ref }}
+          path: cairn-verify
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Check the PR's claims
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}   # via env, never pasted into the script
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          script=pr/skills/verify-agent-claims/scripts/verify_claims.py
+          if [ -d cairn-verify ]; then script=cairn-verify/skills/verify-agent-claims/scripts/verify_claims.py; fi
+          printf '%s\n' "${PR_BODY:-}" > "$RUNNER_TEMP/pr-body.txt"
+          # A script error exits non-zero and fails the job; findings exit 0.
+          python "$script" claims --repo pr --range "origin/${BASE_REF}..HEAD" \
+            --text "$RUNNER_TEMP/pr-body.txt" --markdown > "$RUNNER_TEMP/report.md"
+          {
+            echo '<!-- cairn-verify -->'
+            echo '### Cairn Verify: what this PR says it did, checked against what it changed'
+            echo
+            cat "$RUNNER_TEMP/report.md"
+            echo
+            echo '<sub>Updated for ${{ github.event.pull_request.head.sha }}. Checks commit messages and this description; it reports and never blocks the merge.</sub>'
+          } > "$RUNNER_TEMP/comment.md"
+          cat "$RUNNER_TEMP/comment.md" >> "$GITHUB_STEP_SUMMARY"
+
+      # A PR from a fork gets a read-only token, so the result stays in the job summary above.
+      - name: Post or update the one sticky comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/comment.md"
+          if [ "$(wc -c < "$body")" -gt 65000 ]; then      # GitHub's comment limit is 65,536 characters
+            head -c 64000 "$body" > "$RUNNER_TEMP/short.md"
+            printf '\n\n...cut to fit a comment; the full report is in the workflow run summary.\n' >> "$RUNNER_TEMP/short.md"
+            body="$RUNNER_TEMP/short.md"
+          fi
+          jq -Rs '{body: .}' "$body" > "$RUNNER_TEMP/payload.json"
+          ids=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | contains("<!-- cairn-verify -->"))) | .id')
+          id="${ids%%$'\n'*}"
+          if [ -n "$id" ]; then
+            gh api --method PATCH "repos/$REPO/issues/comments/$id" --input "$RUNNER_TEMP/payload.json" > /dev/null
+            echo "updated comment $id"
+          else
+            gh api --method POST "repos/$REPO/issues/$PR/comments" --input "$RUNNER_TEMP/payload.json" > /dev/null
+            echo "created a comment"
+          fi

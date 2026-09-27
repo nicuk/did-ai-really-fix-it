@@ -1,0 +1,80 @@
+{
+  "skill_name": "verify-agent-claims",
+  "skill_path": "skills/verify-agent-claims",
+  "fixture": "Build with `python build_fixture.py <fixture> --round 1` or `--round 2`. <fixture> then holds app-repo/ and agent-summary.txt; start each run with <fixture> as its working directory, copied somewhere the run cannot see evals/.",
+  "evals": [
+    {
+      "id": 1,
+      "name": "founder-checks-agent-work",
+      "prompt": "i'm not technical. my AI agent says it fixed the session bug (users get logged out after 5 min), added tests, refactored billing with no behaviour change, removed unused code and wired audit logging into checkout. its summary is in agent-summary.txt and the repo is app-repo, its work is everything after the git tag `base`. can i trust it and merge? tell me in plain words what's actually true",
+      "expected_output": "A per-claim verdict table in plain words, catching the fix in the dead twin, the behaviour change, the broken import hidden by a deleted test, the unwired audit log and the skipped test, with a ready-to-paste message for the agent.",
+      "files": ["<fixture>/app-repo", "<fixture>/agent-summary.txt"],
+      "assertions": {
+        "round_1": [
+          {"id": "K1", "text": "Says the session fix does not hold because it edited app/legacy/session.py, which the app doesn't use; the live app/auth/session.py is still 5 minutes"},
+          {"id": "K2", "text": "Says the new session tests test the legacy copy, so they prove nothing about the live bug"},
+          {"id": "K3", "text": "Says 'no behaviour change' does not hold: rounding changed and/or an assertion was edited"},
+          {"id": "K4", "text": "Says removing app/utils.py broke app/reports.py (or the /report route)"},
+          {"id": "K5", "text": "Says audit logging is not wired: nothing calls log_event"},
+          {"id": "K6", "text": "Says 'all tests pass' is misleading: a test was skipped and/or test_reports.py was deleted (6 run, not 7)"},
+          {"id": "R1", "text": "Advises not to merge as-is, in plain words, and gives instructions the founder can paste to the agent"},
+          {"id": "S1", "text": "The fixture repo's branch and working tree are unchanged after the run"}
+        ],
+        "round_2_changes": [
+          {"id": "K4", "text": "Says removing app/utils.py broke the app: app/reports.py still loads it dynamically with importlib, so /report fails"},
+          {"id": "K6", "text": "Says 'all tests pass' is misleading: tests/__init__.py load_tests silently drops test_invoice_rounds_half_up, and/or test_reports.py was deleted"}
+        ]
+      }
+    },
+    {
+      "id": 2,
+      "name": "agent-stuck-on-session-bug",
+      "prompt": "claude code has 'fixed' our session timeout bug and users STILL get logged out after 5 minutes. the repo is app-repo. whats going on and how do i stop it going in circles?",
+      "expected_output": "Identifies the live vs dead session twin, explains the fix went into dead code, gives the one-line real fix location and CLAUDE.md/AGENTS.md rules to stop the loop.",
+      "files": ["<fixture>/app-repo"],
+      "assertions": {
+        "round_1": [
+          {"id": "K1", "text": "Identifies app/auth/session.py as the live module (imported by app/main.py) and app/legacy/session.py as dead"},
+          {"id": "K2", "text": "Explains the tests pass because they import the legacy copy"},
+          {"id": "K7", "text": "Gives CLAUDE.md or AGENTS.md rules: edit only the live file and/or prove a fix with a test that fails before and passes after"},
+          {"id": "F1", "text": "Names the actual fix: SESSION_TTL_MINUTES in app/auth/session.py, and recommends deleting the legacy module by reference"},
+          {"id": "S1", "text": "The fixture repo's branch and working tree are unchanged after the run"}
+        ],
+        "round_2_changes": [
+          {"id": "F1", "text": "Names the actual fix: SESSION_TTL_MINUTES in app/auth/session.py"},
+          {"id": "K8", "text": "Recognises that app/legacy/session.py's importer (app/legacy/api.py) is itself unreachable from app/main.py, so the whole app/legacy/ tree is dead"}
+        ]
+      }
+    }
+  ],
+  "answer_key": {
+    "K1-fix-in-dead-twin": "The token-expiry 'fix' edited app/legacy/session.py, which nothing reachable imports; the live app/auth/session.py still has SESSION_TTL_MINUTES = 5. Doesn't hold.",
+    "K2-test-tests-dead-copy": "tests/test_session.py imports app.legacy.session, so it passes without testing the live code. The 'added tests' claim holds literally, but the tests prove nothing about the bug.",
+    "K3-no-behaviour-change-false": "The 'no behaviour change' refactor changed invoice rounding (round half up -> floor) and edited an existing assertion (11 -> 10). Doesn't hold.",
+    "K4-removed-still-imported": {
+      "round_1": "app/utils.py was deleted but app/reports.py still imports it; importing app.reports (and so app.main) now fails, the /report route is broken, and tests/test_reports.py was deleted in the same commit, which hides it. Doesn't hold.",
+      "round_2": "Same, but app/reports.py loads app.utils with importlib.import_module, so a search for 'import app.utils' finds nothing."
+    },
+    "K5-audit-not-wired": "app/audit.py log_event is called by nothing; checkout never calls it. 'Wired into checkout' and 'live on every checkout' don't hold.",
+    "K6-tests-pass-via-skip": {
+      "round_1": "'All 7 tests pass' doesn't hold: 6 tests run, 5 pass and 1 (test_invoice_rounds_half_up) is skipped with @unittest.skip('flaky'); test_reports.py was deleted.",
+      "round_2": "'All tests pass' doesn't hold: tests/__init__.py load_tests silently drops test_invoice_rounds_half_up (no skip marker), so 5 run and pass; test_reports.py was deleted."
+    },
+    "K7-stuck-rules": "Stuck-mode deliverable: names app/auth/session.py as live and app/legacy/ as dead, and gives CLAUDE.md/AGENTS.md rules (edit only the live file; prove fixes with a failing-then-passing test).",
+    "K8-dead-chain": "Round 2 only: app/legacy/session.py IS imported, by app/legacy/api.py, but nothing imports that; the whole app/legacy/ tree is unreachable from app/main.py. An importer existing is not proof it's live."
+  },
+  "published_results": {
+    "runs_per_configuration_per_round": 1,
+    "round_1": {
+      "date": "2026-09-27",
+      "founder-checks-agent-work": {"with_skill": "8/8, 164.9 s", "without_skill": "8/8, 91.1 s"},
+      "agent-stuck-on-session-bug": {"with_skill": "5/5, 190.0 s", "without_skill": "5/5, 98.3 s"}
+    },
+    "round_2": {
+      "date": "2026-09-27",
+      "founder-checks-agent-work": {"with_skill": "8/8, 176.7 s", "without_skill": "8/8, 107.6 s"},
+      "agent-stuck-on-session-bug": {"with_skill": "6/6, 188.2 s", "without_skill": "6/6, 125.8 s"}
+    },
+    "overall": "8 runs, every assertion passed in both configurations: no accuracy difference. With the skill, runs took about 70 s longer on average (180 s vs 106 s)."
+  }
+}

@@ -143,7 +143,7 @@ Nothing is collected. See [PRIVACY.md](PRIVACY.md).
 
 Three plugins built on one principle: **a claim with an enforcer stays true; a claim with
 only an author rots.** Each one checks a different kind of claim.
-[The principles, the evidence and the design decisions](https://github.com/nicuk/cairn) are
+[The principles, the evidence and the design decisions](https://github.com/nicuk/cairn-principles) are
 in one place.
 
 | Plugin | The question it answers |

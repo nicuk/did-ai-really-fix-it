@@ -165,18 +165,26 @@ It builds the import graph and reports:
   config. Read these before deciding: the config may load them;
 - **kept alive only by tests**: tests import these, but nothing a user reaches does.
 
-Entry points default to Next.js, Node and Python conventions (`main.py`, `app.py`,
-`wsgi.py`, `manage.py`), plus any file with a `__main__` block and anything `package.json`
-names in `main`, `bin` or `scripts`. Pass `--entry` to add others (workers, cron handlers).
-If most of the code comes out unreachable, the script warns: an entry point is missing.
-Fix that before believing the result.
+Entry points default to Next.js, SvelteKit, Nuxt, Astro, Storybook, Node and Python
+conventions (`main.py`, `app.py`, `wsgi.py`, `manage.py`), applied from every app or package
+folder in a monorepo, plus any file with a `__main__` block, anything `package.json` names
+in `main`, `bin` or `scripts`, a Vite `index.html`'s module script, test-runner setup files,
+and `package.module:app` strings (uvicorn, gunicorn, Helm charts, Dockerfiles). `.svelte`,
+`.vue` and `.mdx` files count as used, and their imports are followed. Pass `--entry` to add
+others (workers, cron handlers). If more than a quarter of an app's code comes out
+unreachable, the script warns for that app: an entry point is probably missing. Fix that
+before believing the result. When neither copy of a twin is reachable, it says so rather
+than guessing which is live.
 
 Import aliases are read automatically from every `tsconfig.json` / `jsconfig.json` (and
 `tsconfig.*.json`): `compilerOptions.paths`, `baseUrl` and relative `extends`, each applying
 to the files under its own folder. The run prints the aliases it read. `--alias` adds more;
-`@` and `~` for the repo root are assumed only when no `--alias` is given. Python packages
-under `src/` resolve by their top-level name, and relative imports (`from .models import x`)
-are followed.
+`@` and `~` for the repo root are assumed only when no `--alias` is given (in a Nuxt app, `~`
+means that app's folder). Workspace packages resolve by their `package.json` name, SvelteKit's
+`$lib` by convention, and a TypeScript `./x.js` import to `x.ts`. Python packages under any
+`src/` (including `packages/*/src` and `services/*/src`) resolve by their top-level name, a
+folder with a `pyproject.toml` is its own import root, and relative imports
+(`from .models import x`) are followed.
 
 The script says "unreachable", not "unused". It can't follow an import built from a string
 at runtime (`importlib.import_module("app." + name)`, `require(variable)`), a plugin system

@@ -90,8 +90,8 @@ def terminal() -> str:
         (P, "$ python verify_claims.py --self-test"),
         (G, "ok   removed-still-referenced"),
         (G, "ok   twin"),
-        (D, "…    21 more checks, each forced to fail once on a planted defect"),
-        (G, "self-test passed: 23/23 checks fired"),
+        (D, "…    52 more checks, each forced to fail once on a planted defect"),
+        (G, "self-test passed: 54/54 checks fired"),
         (T, ""),
         (P, "$ python verify_claims.py claims --repo app-repo --range base..main --text agent-summary.txt"),
         (F, "[CONTRADICTED] (summary) Wired audit logging into checkout, so it's now live on every checkout."),
@@ -128,7 +128,7 @@ def terminal() -> str:
                 f'font-size="19" font-weight="{weight.get(kind, "400")}" fill="{color[kind]}" xml:space="preserve">{escape(s)}</text>')
             t += 0.16 if s else 0.3
     h = y0 + len(lines) * lh + 20
-    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 {h}" width="1280" height="{h}" role="img" aria-label="The script's self-test firing all 23 checks, then a claims check that contradicts an unwired audit log and questions a behaviour claim and a test count, then an orphan scan that finds the session fix went into a copy only tests reach">
+    return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 {h}" width="1280" height="{h}" role="img" aria-label="The script's self-test firing all 54 checks, then a claims check that contradicts an unwired audit log and questions a behaviour claim and a test count, then an orphan scan that finds the session fix went into a copy only tests reach">
 <style>
 .line {{ animation: in .25s ease-out both; }}
 @keyframes in {{ from {{ opacity: 0; transform: translateY(4px); }} to {{ opacity: 1; transform: none; }} }}

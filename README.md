@@ -29,7 +29,7 @@ Cairn Verify is a skill for Claude Code. It splits the agent's commits, PR descr
 chat summary into claims, checks each one, and gives it a verdict: **holds**, **doesn't
 hold**, or **can't tell**, with the one command that would settle it.
 
-![The script's self-test fires all 23 checks. A claims check contradicts "wired audit logging into checkout" because nothing imports the new file, and questions "no behaviour change" and "all 7 tests pass". An orphan scan shows the session fix went into a copy only tests reach, with the live twin named.](assets/verify-demo.svg)
+![The script's self-test fires all 54 checks. A claims check contradicts "wired audit logging into checkout" because nothing imports the new file, and questions "no behaviour change" and "all 7 tests pass". An orphan scan shows the session fix went into a copy only tests reach, with the live twin named.](assets/verify-demo.svg)
 
 *Real output, from a small made-up app whose agent overclaims.*
 
@@ -97,7 +97,8 @@ python skills/verify-agent-claims/scripts/verify_claims.py orphans --repo . [--e
 - **`orphans`** builds the import graph for JS/TS and Python and reports dead files in
   rounds, twins with the reachable copy named, files only a path string mentions, and code
   kept alive only by tests. It reads import aliases from `tsconfig.json` / `jsconfig.json`
-  by itself.
+  by itself, and in a monorepo it finds each app and package (Next.js, SvelteKit, Nuxt, Vite,
+  Astro, Storybook, Python `src/` packages) and applies its entry conventions there.
 
 It is a locator, not a judge: it marks claims CONTRADICTED, UNPROVEN or NO CONTRADICTION
 FOUND, and the skill turns those into verdicts by reading and running the code. It can't
@@ -132,9 +133,9 @@ reach the network.
 
 **Case study:** [The dead auth system that took three rounds to find](https://github.com/nicuk/cairn-principles/blob/main/case-studies/verify-dead-auth-rounds.md).
 
-- **On a real 504-file codebase** built with coding agents, the orphan scan found every one
-  of the 22 dead files the repo's own guard listed, plus 10 more the guard had missed, in
-  under a second. On an honest, carefully written deletion commit from the same repo, the
+- **On a real 504-file codebase** built with coding agents, the orphan scan found 21 of
+  the 22 dead files the repo's own guard listed as orphans, and the 22nd as a file named but
+  never imported, plus 10 more the guard had missed, in under a second. On an honest, carefully written deletion commit from the same repo, the
   claims check found no contradictions.
 - **On two made-up apps** built to overclaim (a fix in a dead copy, a test dropped in
   config, a dynamic import broken by a deletion, an unwired feature), runs with and without

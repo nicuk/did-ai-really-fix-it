@@ -20,21 +20,26 @@ jobs:
           python-version: "3.12"
       - name: Every check fires on a planted defect
         run: python skills/verify-agent-claims/scripts/verify_claims.py --self-test
-      - name: The script imports nothing that can reach the network
+      - name: The script can't reach the network, and nothing private is committed
+        # Reads the syntax tree; a grep for `import socket` missed `import json, socket` and
+        # __import__. It also fails on an absolute path from someone's machine in any tracked file.
         run: |
-          if grep -nE '^\s*(import|from)\s+(socket|urllib|http|requests|httpx|aiohttp|ftplib|smtplib)\b' \
-               skills/verify-agent-claims/scripts/verify_claims.py; then
-            echo "::error::verify_claims.py imports a networking module; PRIVACY.md says it makes no network requests"
-            exit 1
-          fi
+          python .github/scripts/check_privacy.py --self-test
+          python .github/scripts/check_privacy.py
       - name: The skill's frontmatter parses as strict YAML
         # A description containing ": " once passed `claude plugin validate` and still broke
         # the skill loader, so the parse is checked here, strictly.
         run: |
           pip install --quiet pyyaml
           python .github/scripts/check_frontmatter.py
-      - name: This repo passes Cairn Memory's audit
-        # The family checks its own agent-facing files with Cairn Memory, fetched from its repo.
+      - name: The numbers and release facts the docs state match their source
         run: |
-          curl -fsSL https://raw.githubusercontent.com/nicuk/claude-md-memory-architecture/main/skills/memory-architecture/scripts/audit_memory.py -o "$RUNNER_TEMP/audit_memory.py"
-          python "$RUNNER_TEMP/audit_memory.py" --repo .
+          python .github/scripts/check_claims.py --self-test
+          python .github/scripts/check_claims.py
+      - name: This repo passes Cairn Memory's audit, warnings included
+        # The family checks its own agent-facing files with Cairn Memory, fetched from its repo.
+        # Pinned to a release, so a new Memory check can't turn this repo red unannounced:
+        # raise the pin on purpose, after this repo passes the new release.
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/nicuk/claude-md-memory-architecture/v1.4.0/skills/memory-architecture/scripts/audit_memory.py -o "$RUNNER_TEMP/audit_memory.py"
+          python "$RUNNER_TEMP/audit_memory.py" --repo . --strict

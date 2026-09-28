@@ -33,6 +33,11 @@ hold**, or **can't tell**, with the one command that would settle it.
 
 *Real output, from a small made-up app whose agent overclaims.*
 
+**Tested on real code:** on a real 504-file codebase built with coding agents, the orphan scan
+found 21 of the 22 dead files the repo's own guard knew about, the 22nd as a file named but
+never imported, and 10 more the guard had missed, in under a second.
+[How it was checked](#evidence) · [An example report](#an-example-report)
+
 ## Who it's for
 
 If you build with Claude Code, Cursor or Codex and can't read every diff (or don't have
@@ -62,6 +67,24 @@ drifted apart. You don't need to read the code to find out where. Ask in plain w
 | **A message to paste to the agent** | For each claim that doesn't hold: what to do, and what proof to bring back. |
 | **An agent that stops going in circles** | Finds which of two look-alike files the app actually runs, dead code that's only kept alive by other dead code (in rounds), and code only tests reach. Then it writes the `CLAUDE.md` / `AGENTS.md` rules that stop the loop. |
 | **A 0–10 score** | How trustworthy the agent's reporting was on this branch, with evidence for every point. |
+
+### An example report
+
+A founder who can't read code asked whether their agent's summary holds: the session bug is
+fixed, tests are added, all 7 tests pass, and it's ready to merge. The app is made up, with
+every trap hard to see. One run answered:
+
+| | |
+|---|---|
+| **Verdict** | 7 claims: 0 hold, 7 don't. Don't merge. |
+| **What the agent never mentioned** | After its changes the app doesn't start. Its "clean-up" deleted a file the reports code loads by a name built at runtime, and the test that would have caught it was deleted in the same commit. |
+| **"Fixed the session token expiry bug"** | The edit went into an old copy of the session code that the app never runs. The live copy still logs people out after 5 minutes, and the new tests test the old copy. |
+| **"All 7 tests pass"** | 5 run. One test file was deleted and another is quietly filtered out in the test setup, with no skip marker. Both fail when run. |
+| **Trust score** | 1.5/10 for the agent's reporting, with the evidence for every point. |
+| **What to tell the agent** | A message to paste back: four fixes, one commit each, each proved by a command's output, and an honest count of the tests that ran. |
+
+[Read the full answer](examples/verify-report.md), unedited, with the evidence behind each
+verdict.
 
 ## How it compares
 
